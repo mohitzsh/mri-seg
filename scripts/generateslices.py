@@ -4,6 +4,7 @@ from PIL import Image
 import argparse
 import matplotlib.pyplot as plt
 from nilearn import image
+from nilearn import plotting
 
 TRAIN_VOL = [1,2,3,4,5,6,7,8,9,10,11,12,13]
 VAL_VOL = [14,15,16,17,18]
@@ -56,7 +57,7 @@ def visdir():
     Directory with 2d Data files
 """
 def slicedatadir():
-    return os.path.join(currdir,"data","2d","data")
+    return os.path.join(currdir,"..","data","2d","data")
 
 """
     Path to visualization files for mriidx
@@ -73,7 +74,6 @@ def slicename(mriidx,sliceidx):
     Dump all slices of Img and Cls files
 """
 def dump_slices(idx):
-    plt.ion()
     imgf = fname2path(idx2name(idx,"img"),"img")
     clsf = fname2path(idx2name(idx,"cls"),"cls")
 
@@ -92,26 +92,25 @@ def dump_slices(idx):
 
     nslices,_,_ = imgnp.shape
 
-    if not os.path.exists(idxvisdir(idx)):
-        os.makedirs(idxvisdir(idx))
 
-    [savet2dfiles(imgnp[n],clsnp[n],slicedatadir(),slicename(idx,n)) for n in range(nslices)]
+    for n in range(nslices):
+        savet2dfiles(imgnp[n],clsnp[n],slicedatadir(),slicename(idx,n))
 
 """
     Save Numpy array as .png file
 """
 def savet2dfiles(imgnp,clsnp,dirname,slicename):
-    img = Image.fromarray(imgnp,'P')
-    cls = Image.fromarray(clsnp,'P')
-
-    img.save(os.path.join(dirname,"img",slicename))
-
-    cls.save(os.path.join(dirname,"cls",slicename))
+    if not np.all(np.unique(clsnp)==0):
+        plt.imsave(os.path.join(dirname,"img",slicename),imgnp)
+        print("img/{} saved".format(slicename))
+        plt.imsave(os.path.join(dirname,"cls",slicename),clsnp)
+        print("cls/{} saved".format(slicename))
 
 args = parse_args()
 
 def main():
-    if args.mode == "vis":
-        dump_slices_vis(VIS_VOL)
+    VOL_LIST = TRAIN_VOL + VAL_VOL
+    for vol in VOL_LIST:
+        dump_slices(vol)
 if __name__ == "__main__":
     main()
