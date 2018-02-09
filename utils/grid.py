@@ -2,7 +2,7 @@ import torch
 from torch.nn import ConstantPad2d
 
 def forward_diff(grid):
-    nd = len(grid.shape)
+    nd = len(grid.data.shape)
     slice1 = [slice(None)]*nd
     slice2 = [slice(None)]*nd
 

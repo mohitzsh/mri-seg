@@ -36,9 +36,9 @@ class IBSRv2(Dataset):
         fname1,fname2 = self.pairlist[index]
 
         with open(os.path.join(self.datadir,"img",fname1+".png"),'rb') as f:
-            img1 = Image.open(f).convert('P')
+            img1 = Image.open(f).convert('L')
         with open(os.path.join(self.datadir,"img",fname2+".png"),'rb') as f:
-            img2 = Image.open(f).convert('P')
+            img2 = Image.open(f).convert('L')
         with open(os.path.join(self.datadir,"cls",fname1+".png"),'rb') as f:
             label1 = Image.open(f).convert('P')
         with open(os.path.join(self.datadir,"cls",fname2+".png"),'rb') as f:
