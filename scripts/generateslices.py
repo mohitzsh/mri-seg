@@ -21,15 +21,14 @@ perm = (2,1,0)
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("datadir",
+    parser.add_argument("--datadir",
                         help="A directory containing img (Images) and cls (GT Segmentation) folder.")
-    parser.add_argument("--mode",choices=("vis","dump"),default="dump",
-                        help="visualization vs dump mode")
     parser.add_argument("--imgsfx",default="_ana_strip.nii.gz",
                         help="Suffix for Image File")
     parser.add_argument("--labsfx",default="_segTRI_ana.nii.gz",
                         help="Suffix for Label File")
-
+    parser.add_argument("--outdir",
+                        help="Output DIrectory for slices.")
     return parser.parse_args()
 
 """
@@ -48,32 +47,35 @@ def fname2path(fname,ftype="img"):
     return os.path.join(args.datadir,ftype,fname)
 
 """
-    Directory with visualization files
-"""
-def visdir():
-    return os.path.join(currdir,"..","data","2d","vis")
-
-"""
     Directory with 2d Data files
 """
 def slicedatadir():
-    return os.path.join(currdir,"..","data","2d","data")
+    if not os.path.exists(os.path.join(args.outdir,"data")):
+        os.makedirs(os.path.join(args.outdir,"data","img"))
+        os.makedirs(os.path.join(args.outdir,"data","cls"))
+    return os.path.join(args.ourdir,"data")
 
 """
-    Path to visualization files for mriidx
+    Directory for 2d Vis files
 """
-def idxvisdir(mriidx):
-    return os.path.join(visdir(),"IBSR_{}".format(mriidx))
+def slicevisdir():
+    if not os.path.exists(os.path.join(args.outdir,"vis")):
+        os.makedirs(os.path.join(args.outdir,"vis","img"))
+        os.makedirs(os.path.join(args.outdir,"vis","cls"))
+    return os.path.join(args.outdir,"vis")
 
 """
-    Return filename for saved combined img and cls
+    Returns name for slice in TIF and PNG Format
+    NOTE: USE TIF extension only for images. For Labels, keep using PNG
 """
 def slicename(mriidx,sliceidx):
-    return "{:02d}_{:03d}.png".format(mriidx,sliceidx)
+    return "{:02d}_{:03d}.tif".format(mriidx,sliceidx), "{:02d}_{:03d}.png".format(mriidx,sliceidx)
+
 """
     Dump all slices of Img and Cls files
 """
 def dump_slices(idx):
+    import pdb; pdb.set_trace()
     imgf = fname2path(idx2name(idx,"img"),"img")
     clsf = fname2path(idx2name(idx,"cls"),"cls")
 
@@ -81,29 +83,36 @@ def dump_slices(idx):
     cls = image.load_img(clsf)
 
     imgnp = img.get_data()
-    imgnp = np.squeeze(imgnp,axis=3)
-    imgnp = np.transpose(imgnp,perm)
-
     clsnp = cls.get_data()
-    clsnp = np.squeeze(clsnp,axis=3)
-    clsnp = np.transpose(clsnp,perm)
 
-    # import pdb; pdb.set_trace()
+    imgnp = np.squeeze(imgnp,axis=3)
+    clsnp = np.squeeze(clsnp,axis=3)
+    imgnp = np.transpose(imgnp,perm)
+    clsnp = np.transpose(clsnp,perm)
 
     nslices,_,_ = imgnp.shape
 
 
     for n in range(nslices):
-        savet2dfiles(imgnp[n],clsnp[n],slicedatadir(),slicename(idx,n))
+        savet2dfiles(imgnp[n],clsnp[n],slicedatadir(),slicevisdir(),slicename(idx,n))
 
 """
     Save Numpy array as .png file
 """
-def savet2dfiles(imgnp,clsnp,dirname,slicename):
+def savet2dfiles(imgnp,clsnp,datadirname,visdirname,slicename):
+    tif = slicename[0]
+    png = slicename[1]
     if not np.all(np.unique(clsnp)==0):
-        plt.imsave(os.path.join(dirname,"img",slicename),imgnp)
+        # First save data files
+        img = Image.fromarray(imgnp)
+        img.save(os.path.join(datadirname,"img",tif))
+        plt.imsave(os.path.join(datadirname,"cls",png),clsnp)
+
+        # Now save the visualization data
+        plt.imsave(os.path.join(visdirname,"img",png),imgnp,cmap='RdGy')
+        plt.imsave(os.path.join(visdirname,"cls",png),clsnp)
+
         print("img/{} saved".format(slicename))
-        plt.imsave(os.path.join(dirname,"cls",slicename),clsnp)
         print("cls/{} saved".format(slicename))
 
 args = parse_args()

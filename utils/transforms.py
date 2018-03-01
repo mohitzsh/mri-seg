@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+from PIL import Image
 
 class ToTensorLabel(object):
     """
@@ -39,3 +40,40 @@ class OneHotEncode(object):
         #                 assert(label_a[i][j] == c)
 
         return torch.from_numpy(ohlabel)
+
+class RandomRotation(object):
+    """
+        Takes a PIL Image and rotate
+    """
+    def __init__(self,degree,resample=Image.BILINEAR):
+        self.degree = degree
+        self.resample = resample
+    def __call__(self,img):
+        degree = 2*self.degree*np.random.random_sample() + self.degree
+        return img.rotate(degree,resample=self.resample)
+
+class Rotation(object):
+    """
+        Takes a PIL Image and rotate
+    """
+    def __init__(self,degree,resample=Image.BILINEAR):
+        self.degree = degree
+        self.resample = resample
+    def __call__(self,img):
+        return img.rotate(self.degree,resample=self.resample)
+
+"""
+    Takes PIL image in 'F' mode and returns normalize image [-1,1]
+"""
+class ToTensorTIF(object):
+    def __init__(self,norm=True):
+        self.norm = norm
+
+    def __call__(self,img):
+        imgnp = np.array(img)[:,:,None]
+        if np.max(imgnp) != 0:
+            imgnp = imgnp/np.max(imgnp)
+        if np.min(imgnp) != 0:
+            imgnp = imgnp/np.abs(np.min(imgnp))
+
+        return transforms.ToTensor()(imgnp)

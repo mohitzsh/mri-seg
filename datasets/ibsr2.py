@@ -4,6 +4,10 @@ from PIL import Image
 from torchvision.transforms import Compose
 from utils.transforms import OneHotEncode
 
+
+# The Images are first cropped as PIL Images
+crop_size = (0,0,200,200)
+
 def get_pairs(filename):
     f = open(filename,'r')
     names = [name.strip() for name in f.readlines()]
@@ -35,15 +39,15 @@ class IBSRv2(Dataset):
     def __getitem__(self,index):
         fname1,fname2 = self.pairlist[index]
 
-        with open(os.path.join(self.datadir,"img",fname1+".png"),'rb') as f:
-            img1 = Image.open(f).convert('L')
-        with open(os.path.join(self.datadir,"img",fname2+".png"),'rb') as f:
-            img2 = Image.open(f).convert('L')
+        with open(os.path.join(self.datadir,"img",fname1+".tif"),'rb') as f:
+            img1 = Image.open(f).crop(crop_size)
+        with open(os.path.join(self.datadir,"img",fname2+".tif"),'rb') as f:
+            img2 = Image.open(f).crop(crop_size)
         with open(os.path.join(self.datadir,"cls",fname1+".png"),'rb') as f:
-            label1 = Image.open(f).convert('P')
+            label1 = Image.open(f).convert('P').crop(crop_size)
         with open(os.path.join(self.datadir,"cls",fname2+".png"),'rb') as f:
-            label2 = Image.open(f).convert('P')
-
+            label2 = Image.open(f).convert('P').crop(crop_size)
+        # import pdb; pdb.set_trace()
         img1,label1 = self.co_transform((img1,label1))
         img2,label2 = self.co_transform((img2,label2))
         img1 = self.img_transform(img1)
