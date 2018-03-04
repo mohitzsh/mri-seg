@@ -29,6 +29,8 @@ def parse_args():
                         help="Suffix for Label File")
     parser.add_argument("--outdir",
                         help="Output DIrectory for slices.")
+    parser.add_argument("--train_list")
+    parser.add_argument("--val_list")
     return parser.parse_args()
 
 """
@@ -53,7 +55,7 @@ def slicedatadir():
     if not os.path.exists(os.path.join(args.outdir,"data")):
         os.makedirs(os.path.join(args.outdir,"data","img"))
         os.makedirs(os.path.join(args.outdir,"data","cls"))
-    return os.path.join(args.ourdir,"data")
+    return os.path.join(args.outdir,"data")
 
 """
     Directory for 2d Vis files
@@ -69,13 +71,12 @@ def slicevisdir():
     NOTE: USE TIF extension only for images. For Labels, keep using PNG
 """
 def slicename(mriidx,sliceidx):
-    return "{:02d}_{:03d}.tif".format(mriidx,sliceidx), "{:02d}_{:03d}.png".format(mriidx,sliceidx)
+    return "{:02d}_{:03d}.tif".format(mriidx,sliceidx), "{:02d}_{:03d}.png".format(mriidx,sliceidx), "{:02d}_{:03d}".format(mriidx,sliceidx)
 
 """
     Dump all slices of Img and Cls files
 """
 def dump_slices(idx):
-    import pdb; pdb.set_trace()
     imgf = fname2path(idx2name(idx,"img"),"img")
     clsf = fname2path(idx2name(idx,"cls"),"cls")
 
@@ -85,8 +86,10 @@ def dump_slices(idx):
     imgnp = img.get_data()
     clsnp = cls.get_data()
 
-    imgnp = np.squeeze(imgnp,axis=3)
-    clsnp = np.squeeze(clsnp,axis=3)
+    if imgnp.ndim == 4:
+        imgnp = np.squeeze(imgnp,axis=3)
+    if clsnp.ndim == 4:
+        clsnp = np.squeeze(clsnp,axis=3)
     imgnp = np.transpose(imgnp,perm)
     clsnp = np.transpose(clsnp,perm)
 
@@ -102,6 +105,7 @@ def dump_slices(idx):
 def savet2dfiles(imgnp,clsnp,datadirname,visdirname,slicename):
     tif = slicename[0]
     png = slicename[1]
+    name = slicename[2]
     if not np.all(np.unique(clsnp)==0):
         # First save data files
         img = Image.fromarray(imgnp)
@@ -109,11 +113,21 @@ def savet2dfiles(imgnp,clsnp,datadirname,visdirname,slicename):
         plt.imsave(os.path.join(datadirname,"cls",png),clsnp)
 
         # Now save the visualization data
-        plt.imsave(os.path.join(visdirname,"img",png),imgnp,cmap='RdGy')
+        plt.imsave(os.path.join(visdirname,"img",png),imgnp,cmap='gray')
         plt.imsave(os.path.join(visdirname,"cls",png),clsnp)
 
         print("img/{} saved".format(slicename))
         print("cls/{} saved".format(slicename))
+
+        # Add this to train_list.txt or val_list.txt
+        if int(name.split("_")[0]) in TRAIN_VOL:
+            f = open(args.train_list,'a+')
+            f.write("{}\n".format(name))
+            f.close()
+        else:
+            f = open(args.val_list,'a+')
+            f.write("{}\n".format(name))
+            f.close()
 
 args = parse_args()
 

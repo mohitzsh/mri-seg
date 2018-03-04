@@ -165,9 +165,9 @@ class ResNet(nn.Module):
         x = self.layer3(x)
         x = self.layer4(x)
         x = self.layer5(x)
-        x = F.upsample_bilinear(x,scale_factor=2)[:,:,:-1,:-1]
-        x = F.upsample_bilinear(x,scale_factor=2)[:,:,:-1,:-1]
-        x = F.upsample_bilinear(x,scale_factor=2)[:,:,:-2,:-2]
+        x = F.upsample_bilinear(x,scale_factor=2)[:,:,:-1,:]
+        x = F.upsample_bilinear(x,scale_factor=2)[:,:,:-1,:]
+        x = F.upsample_bilinear(x,scale_factor=2)[:,:,:,:-2]
         return x
 
 def ParaNet(NoLabels=2):

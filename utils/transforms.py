@@ -20,11 +20,11 @@ class OneHotEncode(object):
     """
         Takes a Tensor of size 1xHxW and create one-hot encoding of size nclassxHxW
     """
-    def __init__(self,nclass=5):
+    def __init__(self,nclass=4):
         self.nclass = nclass
 
     def __call__(self,label):
-        label_a = np.array(transforms.ToPILImage()(label.byte().unsqueeze(0)),np.uint8)
+        label_a = label.squeeze(0).byte().numpy()
 
         ohlabel = np.zeros((self.nclass,label_a.shape[0],label_a.shape[1])).astype(np.uint8)
 
@@ -63,17 +63,15 @@ class Rotation(object):
         return img.rotate(self.degree,resample=self.resample)
 
 """
-    Takes PIL image in 'F' mode and returns normalize image [-1,1]
+    Takes PIL image in 'F' mode and returns a float32 tensor
 """
 class ToTensorTIF(object):
     def __init__(self,norm=True):
         self.norm = norm
 
     def __call__(self,img):
-        imgnp = np.array(img)[:,:,None]
-        if np.max(imgnp) != 0:
-            imgnp = imgnp/np.max(imgnp)
-        if np.min(imgnp) != 0:
-            imgnp = imgnp/np.abs(np.min(imgnp))
-
-        return transforms.ToTensor()(imgnp)
+        orig_size = img.size
+        imgnp = np.array(img.getdata(),dtype=np.dtype('float32')).reshape((orig_size[1],orig_size[0]))
+        # Add a fake dimension for channels
+        imgnp = np.expand_dims(imgnp,axis=0)
+        return torch.from_numpy(imgnp)

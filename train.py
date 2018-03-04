@@ -37,10 +37,11 @@ import subprocess
 
 homedir = os.path.dirname(os.path.realpath(__file__))
 
-H = 200
-W = 200
-crop_size = (0,0,200,200)
-val_img = "01_134"
+H = 218
+W = 182
+nclasses = 4
+val_img_src = "01_083"
+val_img_target = "02_083"
 lab_palette = [0,0,0,
     255,0,0,
     0,255,0,
@@ -121,19 +122,19 @@ def visualize_img(net,img1,img2,outprefix,gpu):
     ## SAVE THE RESULTS
     plt.figure(1)
     plt.subplot(131)
-    plt.imshow(x1,cmap='inferno')
+    plt.imshow(x1,cmap='gray')
     plt.xticks([])
     plt.yticks([])
     plt.subplot(132)
-    plt.imshow(x2,cmap='inferno')
+    plt.imshow(x2,cmap='gray')
     plt.xticks([])
     plt.yticks([])
     plt.subplot(133)
-    plt.imshow(x3,cmap='inferno')
+    plt.imshow(x3,cmap='gray')
     plt.xticks([])
     plt.yticks([])
 
-    plt.savefig(os.path.join(os.path.abspath("../brain_img"),outprefix+"_"+val_img+".png"),bbox_inches='tight')
+    plt.savefig(os.path.join(os.path.abspath("../brain_img"),outprefix+"_"+val_img_src+'_'+val_img_target+".png"),bbox_inches='tight')
 """
     Make a video from the transformations
 """
@@ -170,9 +171,9 @@ def snapshot(model,prefix,snapshot_dir):
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("datadir",
+    parser.add_argument("--datadir",
                         help="Link to data directory for 2d slices")
-    parser.add_argument("exp_name",
+    parser.add_argument("--exp_name",
                         help="name of the experiments for prefixing saved models, images and video")
     parser.add_argument("--max_epoch",default=1,type=int,
                         help="Max epochs for training")
@@ -192,44 +193,45 @@ def parse_arguments():
 
 def main():
     args = parse_arguments()
-    ##############################################
-    ## TRAINING DATASET: GENERIC TRANSFORMATION ##
-    ##############################################
-    # img_transform = [CenterCrop(128),ToTensor()]
-    # label_transform = [CenterCrop(128),ToTensorLabel()]
-    # trainset = IBSRv1(homedir,args.datadir,mode="train",co_transform=Compose([]),
-    #                 img_transform=Compose(img_transform),label_transform=Compose(label_transform))
+    #############################################
+    # TRAINING DATASET: GENERIC TRANSFORMATION ##
+    #############################################
+    img_transform = [ToTensorTIF()]
+    label_transform = [ToTensorLabel()]
+    trainset = IBSRv1(homedir,args.datadir,co_transform=Compose([]),
+                    img_transform=Compose(img_transform),label_transform=Compose(label_transform))
+    trainloader = DataLoader(trainset,batch_size =args.batch_size,drop_last=True)
 
-    ###############################################
+    ##############################################
     # TRAINING DATASET : IDENTITY TRANSFORMATION ##
-    ###############################################
+    # ##############################################
     # img_transform = [CenterCrop(128),ToTensor()]
     # label_transform = [CenterCrop(128),ToTensorLabel()]
     # trainset = IBSRv2(homedir,args.datadir,mode="train",co_transform=Compose([]),
     #                 img_transform=Compose(img_transform),label_transform=Compose(label_transform))
     # trainloader = DataLoader(trainset,batch_size =args.batch_size,drop_last=True)
 
-    #################################
-    ## TRAINING DATASET : ROTATION ##
-    #################################
-    # img_transform = [RandomRotation(10),ToTensorTIF()]
-    img_transform = [ToTensorTIF()]
-    # label_transform = [RandomRotation(10,resample=Image.NEAREST),ToTensorLabel()]
-    label_transform = [ToTensorLabel()]
+    # #################################
+    # ## TRAINING DATASET : ROTATION ##
+    # #################################
+    # # img_transform = [RandomRotation(10),ToTensorTIF()]
+    # img_transform = [ToTensorTIF()]
+    # # label_transform = [RandomRotation(10,resample=Image.NEAREST),ToTensorLabel()]
+    # label_transform = [ToTensorLabel()]
+    #
+    # # img_transform_val_src = [Rotation(0),ToTensorTIF()]
+    # img_transform_val_src = [ToTensorTIF()]
+    # # label_transform_val_src = [Rotation(5,resample=Image.NEAREST),ToTensorLabel()]
+    # label_transform_val_src = [ToTensorLabel()]
+    #
+    # # img_transform_val_target = [Rotation(15),ToTensorTIF()]
+    # img_transform_val_target = [ToTensorTIF()]
+    # # label_transform_val_target = [Rotation(-5,resample=Image.NEAREST),ToTensorLabel()]
+    # label_transform_val_target = [ToTensorLabel()]
 
-    # img_transform_val_src = [Rotation(0),ToTensorTIF()]
-    img_transform_val_src = [ToTensorTIF()]
-    # label_transform_val_src = [Rotation(5,resample=Image.NEAREST),ToTensorLabel()]
-    label_transform_val_src = [ToTensorLabel()]
-
-    # img_transform_val_target = [Rotation(15),ToTensorTIF()]
-    img_transform_val_target = [ToTensorTIF()]
-    # label_transform_val_target = [Rotation(-5,resample=Image.NEAREST),ToTensorLabel()]
-    label_transform_val_target = [ToTensorLabel()]
-
-    trainset = IBSRv2(homedir,args.datadir,mode="train",co_transform=Compose([]),
-                    img_transform=Compose(img_transform),label_transform=Compose(label_transform))
-    trainloader = DataLoader(trainset,batch_size =args.batch_size,drop_last=True)
+    # trainset = IBSRv2(homedir,args.datadir,mode="train",co_transform=Compose([]),
+    #                 img_transform=Compose(img_transform),label_transform=Compose(label_transform))
+    # trainloader = DataLoader(trainset,batch_size =args.batch_size,drop_last=True)
     ######################
     # VALIDATION DATASET #
     ######################
@@ -262,27 +264,30 @@ def main():
     else:
         theta = Variable(theta)
     basegrid_img = F.affine_grid(theta,torch.Size((args.batch_size,1,H,W)))
-    basegrid_label = F.affine_grid(theta,torch.Size((args.batch_size,5,H,W)))
+    basegrid_label = F.affine_grid(theta,torch.Size((args.batch_size,nclasses,H,W)))
     ######################
     ## SETUP VALIDATION ##
     ######################
-    with open(os.path.join(args.datadir,"img",val_img+".tif"),'rb') as f:
-        img = Image.open(f).crop(crop_size)
-    # import pdb; pdb.set_trace()
-    val_src_img_tensor = Compose(img_transform_val_src)(img).unsqueeze(0)
-    val_tar_img_tensor = Compose(img_transform_val_target)(img).unsqueeze(0)
+    assert(os.path.exists(os.path.join(args.datadir,"img",val_img_src+".tif")))
+    assert(os.path.exists(os.path.join(args.datadir,"img",val_img_target+".tif")))
+    val_img_src_img = Image.open(os.path.join(args.datadir,"img",val_img_src+".tif"))
+    val_img_target_img = Image.open(os.path.join(args.datadir,"img",val_img_target+".tif"))
+    val_img_src_tensor = Compose(img_transform)(val_img_src_img).unsqueeze(0)
+    val_img_target_tensor = Compose(img_transform)(val_img_target_img).unsqueeze(0)
     if args.gpu:
-        val_src_img_tensor = Variable(val_src_img_tensor.cuda())
-        val_tar_img_tensor = Variable(val_tar_img_tensor.cuda())
+        val_img_src_tensor = Variable(val_img_src_tensor.cuda())
+        val_img_target_tensor = Variable(val_img_target_tensor.cuda())
     else:
-        val_src_img_tensor = Variable(val_src_img_tensor)
-        val_tar_img_tensor = Variable(val_tar_img_tensor)
+        val_img_src_tensor = Variable(val_img_src_tensor)
+        val_img_target_tensor = Variable(val_img_target_tensor)
 
     #################################
     ## TRAINING PROCESS STARTS NOW ##
     #################################
     for epoch in range(args.max_epoch):
         for batch_id, ((img1,label1,_),(img2,label2,_),ohlabel1) in enumerate(trainloader):
+            if img1 is None or label1 is None or img2 is None or label2 is None or ohlabel1 is None:
+                continue
             net.train()
             itr = len(trainloader)*(epoch) + batch_id
             if args.gpu:
@@ -292,19 +297,17 @@ def main():
             else:
                 img1, label1, img2, label2,combimg, ohlabel1 = Variable(img1), Variable(label1),\
                         Variable(img2), Variable(label2), Variable(torch.cat((img1,img2),1)), Variable(ohlabel1)
-            # import pdb; pdb.set_trace()
             disp = net(combimg)
             disp = nn.Sigmoid()(disp)*2 - 1 # Displacement is [-1,1]
 
             orig_size = disp.size()
             disp = disp.resize(orig_size[0],orig_size[2],orig_size[3],2)
-
             ##########################
             ## IMAGE TRANSFORMATION ##
             ##########################
             grid_img = basegrid_img + disp
             img1t = F.grid_sample(img1,grid_img)
-            Lsim = nn.MSELoss(size_average=False)(img1t,img2)
+            Lsim = nn.MSELoss(size_average=True)(img1t,img2)
 
             ###########################
             ### LABEL TRANSFORMATION ##
@@ -329,7 +332,7 @@ def main():
                 dispgrad = forward_diff(disp)
                 zeros = Variable(torch.from_numpy(np.zeros(disp.data.shape)))
                 target = torch.cat((zeros,zeros),1).cuda().float() # Target has to be a float
-                Lreg = nn.L1Loss(size_average=False)(dispgrad,target)
+                Lreg = nn.L1Loss()(dispgrad,target)
 
             ######################
             ## PARAMETER UPDATE ##
@@ -339,10 +342,9 @@ def main():
             poly_lr_scheduler(opt, args.lr, itr)
             Ltotal.backward()
             opt.step()
-
             # VISULAIZE THE TRANSFORMATION
             if args.visualize and (itr % 20 == 0):
-                visualize_img(net,val_src_img_tensor.data,val_tar_img_tensor.data,args.exp_name+"_{:05d}".format(itr),args.gpu)
+                visualize_img(net,val_img_src_tensor.data,val_img_target_tensor.data,args.exp_name+"_{:05d}".format(itr),args.gpu)
             print("[{}][{}] Ltotal: {:.4} Lsim: {:.4f} Lseg: {:.4f} Lreg: {:.4f} ".\
                 format(epoch,itr,Ltotal.data[0],Lsim.data[0],args.lambdaseg*(Lseg.data[0]),args.lambdareg*(Lreg.data[0])))
 
