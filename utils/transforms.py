@@ -24,12 +24,15 @@ class OneHotEncode(object):
         self.nclass = nclass
 
     def __call__(self,label):
-        label_a = label.squeeze(0).byte().numpy()
+        if label.is_cuda:
+            label_a = label.cpu().squeeze(0).byte().numpy()
+        else:
+            label_a = label.squeeze(0).byte().numpy()
 
         ohlabel = np.zeros((self.nclass,label_a.shape[0],label_a.shape[1])).astype(np.uint8)
 
         for c in range(self.nclass):
-            ohlabel[c:,:,:] = (label_a == c).astype(np.uint8)
+            ohlabel[c,:,:] = (label_a == c).astype(np.uint8)
 
         # # Do Some assertion
         # print("Assertion about to be made")

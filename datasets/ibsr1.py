@@ -26,12 +26,11 @@ class IBSRv1(Dataset):
                 label_transform=Compose([])):
         self.root = root
         self.datadir = datadir
-        self.mode = mode
         self.co_transform = co_transform
         self.img_transform = img_transform
         self.label_transform = label_transform
 
-        self.list = get_pairs(os.path.join(self.root,"datasets",self.TRAIN_LIST)))
+        self.list = load_list_train(os.path.join(self.root,"datasets",self.TRAIN_LIST))
 
     def __getitem__(self,index):
         fname1,fname2 = self.list[index]
@@ -58,4 +57,4 @@ class IBSRv1(Dataset):
         return ((img1,label1,fname1),(img2,label2,fname2),ohlabel1,ohlabel2)
 
     def __len__(self):
-        return len(self.pairlist)
+        return len(self.list)
