@@ -24,7 +24,6 @@ def forward_diff(grid):
     slice1 = tuple(slice1)
     slice2 = tuple(slice2)
 
-    # gridy = torch.nn.ConstantPad2d((0,0,0,1),0)(grid).clone()
     diffy = grid[slice1] - grid[slice2]
     diffy = ConstantPad2d((0,0,1,0),0)(diffy)
 

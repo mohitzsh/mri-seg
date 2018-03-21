@@ -9,7 +9,13 @@ import argparse
 from utils.scores import dice_score
 import os
 import nibabel as nib
+from torchvision.transforms import Compose
 
+from utils.transforms import ToTensorLabel
+from utils.transforms import ToTensorTIF
+
+
+from PIL import Image
 GPU = False
 nclasses = 4
 IMG_SUFFIX = "_ana_strip.nii.gz"
@@ -146,6 +152,77 @@ def validate(net,
 
     score = dice_score(gt.numpy(),predictions.numpy(),nclasses)
     print(score)
+
+def validate_sim(net,data_dir,train_s_idx,train_e_idx,val_s_idx,val_e_idx,gpu):
+    global GPU
+    GPU = gpu
+    predictions = None
+    gt = None
+    val_img_arr = []
+    val_cls_arr = []
+    train_img_arr = []
+    train_cls_arr = []
+    for v_idx in np.arange(val_s_idx,val_e_idx+1):
+         val_img = Image.open(os.path.join(data_dir,"img",str(v_idx)+'.tif'))
+         val_cls = Image.open(os.path.join(data_dir,"cls",str(v_idx)+'.png')).convert('P')
+         val_img_arr.append(ToTensorTIF()(val_img))
+         val_cls_arr.append(ToTensorLabel()(val_cls))
+
+    for t_idx in np.arange(train_s_idx,train_e_idx+1):
+        train_img = Image.open(os.path.join(data_dir,"img",str(t_idx)+'.tif'))
+        train_cls = Image.open(os.path.join(data_dir,"cls",str(t_idx)+'.png')).convert('P')
+        train_img = ToTensorTIF()(train_img)
+        train_cls = ToTensorLabel()(train_cls)
+
+        train_img_arr.append(train_img)
+        train_cls_arr.append(train_cls)
+
+    for v_idx in np.arange(val_s_idx,val_e_idx+1):
+        v_idx = v_idx - val_s_idx
+        val_img = val_img_arr[v_idx]
+        val_cls = val_cls_arr[v_idx]
+
+        if val_img.dim() == 2:
+            val_img = val_img.unsqueeze(0)
+        if val_cls.dim() == 2:
+            val_cls = val_cls.unsqueeze(0)
+
+        assert(val_img.dim() == 3)
+        assert(val_cls.dim() == 3)
+        if gpu:
+            val_img = val_img.cuda()
+            val_Cls = val_cls.cuda()
+        if predictions is None:
+            predictions = torch.zeros(((val_e_idx - val_s_idx +1),nclasses,) + val_img[0].size()).byte()
+            gt = torch.zeros(((val_e_idx - val_s_idx + 1),) + val_img[0].size()).byte()
+        gt[v_idx] = val_cls[0]
+        # Select 50 Random Traning examples to propagate the labels from
+        train_images = np.random.random_integers(train_s_idx,train_e_idx,50)
+
+        for t_idx in np.arange(train_s_idx,train_e_idx+1):
+            t_idx = t_idx - train_s_idx
+            train_img = train_img_arr[t_idx]
+            train_cls = train_cls_arr[t_idx]
+
+            if train_img.dim() == 2:
+                train_img = train_img.unsqueeze(0)
+            if train_cls.dim() == 2:
+                train_cls = train_cls.unsqueeze(0)
+            if gpu:
+                train_img = train_img.cuda()
+                train_cls = train_cls.cuda()
+
+            assert(train_img.dim() == 3)
+            assert(train_cls.dim() == 3)
+
+            out_img,out_cls_oh = transform_vols(train_img,val_img,train_cls,val_cls,net)
+            predictions[v_idx] += out_cls_oh
+
+    _,predictions = torch.max(predictions,dim=1)
+    score = dice_score(gt.numpy(),predictions.numpy(),nclasses)
+    score = np.average(score,axis=0)
+    return score
+
 
 
 

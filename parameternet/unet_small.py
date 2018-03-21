@@ -87,29 +87,29 @@ class outconv(nn.Module):
         x = self.conv(x)
         return x
 
-class UNet(nn.Module):
-    def __init__(self, n_channels=2, n_classes=2):
-        super(UNet, self).__init__()
-        self.inc = inconv(n_channels, 64)
-        self.down1 = down(64, 128)
-        self.down2 = down(128, 256)
-        self.down3 = down(256, 512)
-        self.down4 = down(512, 512)
-        self.up1 = up(1024, 256)
-        self.up2 = up(512, 128)
-        self.up3 = up(256, 64)
-        self.up4 = up(128, 64)
-        self.outc = outconv(64, n_classes)
+class UNetSmall(nn.Module):
+    def __init__(self, nker = 8,n_channels=2, n_classes=2):
+        super(UNetSmall, self).__init__()
+        self.inc = inconv(n_channels, nker)
+        self.down1 = down(nker, nker)
+        self.down2 = down(nker, 2*nker)
+        self.down3 = down(2*nker, 4*nker)
+        self.down4 = down(4*nker, 4*nker)
+        self.up1 = up(8*nker, 2*nker)
+        self.up2 = up(4*nker, nker)
+        self.up3 = up(2*nker, nker)
+        self.up4 = up(2*nker, nker)
+        self.outc = outconv(nker, n_classes)
 
     def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
+        x1 = self.inc(x)     # x1  : 64
+        x2 = self.down1(x1)  # x2  : 128
+        x3 = self.down2(x2)  # x3  : 256
+        x4 = self.down3(x3)  # x4  : 512
+        x5 = self.down4(x4)  # x5  : 512
+        x = self.up1(x5, x4) # x   : 256
+        x = self.up2(x, x3)  # x   : 128
+        x = self.up3(x, x2)  #
         x = self.up4(x, x1)
         x = self.outc(x)
         return x

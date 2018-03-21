@@ -1,8 +1,6 @@
 import argparse
 import numpy as np
 import os
-
-# Transforms
 from torchvision.transforms import CenterCrop
 from torchvision.transforms import Compose
 from torchvision.transforms import ToTensor
@@ -10,17 +8,15 @@ from utils.transforms import ToTensorLabel
 from utils.transforms import RandomRotation
 from utils.transforms import Rotation
 from utils.transforms import ToTensorTIF
-
-# Data related imports
 from torch.utils.data import DataLoader
 from datasets.ibsr1 import IBSRv1
 from datasets.ibsr2 import IBSRv2
-
+from datasets.sim import Sim
 from parameternet.parameternet import ParaNet
 from parameternet.unet import UNet
+from parameternet.unet_small import UNetSmall
 from utils.plot import plot_displacement_distribution
 from utils.lr_scheduling import poly_lr_scheduler
-# Other Torch Related imports
 import torch
 import torch.optim as optim
 from torch.autograd import Variable
@@ -28,23 +24,26 @@ import torch.nn as nn
 import torch.nn.functional as F
 from utils.interpolations import grid_sample_labels
 from utils.grid import forward_diff
-
-# torchvision transforms
+from utils.losses import cc
 from torchvision.transforms import ToPILImage
 import matplotlib.pyplot as plt
-# Images and Video related imports
 from PIL import Image
 import subprocess
-
 from utils.validate import validate
+from utils.validate import validate_sim
+import tensorboardX as tbx
 
 homedir = os.path.dirname(os.path.realpath(__file__))
 
 H = 218
 W = 182
 nclasses = 4
-train_vols = ['IBSR_01','IBSR_02','IBSR_03','IBSR_04','IBSR_05','IBSR_06','IBSR_07','IBSR_08','IBSR_09','IBSR_10','IBSR_11','IBSR_12','IBSR_13','IBSR_14']
+train_vols = ['IBSR_01','IBSR_02','IBSR_03','IBSR_04','IBSR_05',
+                'IBSR_06','IBSR_07','IBSR_08','IBSR_09','IBSR_10',
+            'IBSR_11','IBSR_12','IBSR_13','IBSR_14']
+
 val_vols = ['IBSR_15','IBSR_16','IBSR_17','IBSR_18',]
+
 val_img_src = "01_083"
 val_img_target = "02_083"
 lab_palette = [0,0,0,
@@ -69,77 +68,6 @@ def savelabel(label,name):
     l.putpalette(lab_palette)
     l.save(name)
 
-"""
-    Visualize the original Image and/or Label
-    mode : 0 Only image is transformed
-           1 Both image and labels are transformed
-"""
-def visualize_orig(fname,args,img_transform,outprefix="",mode=0):
-    with open(os.path.join(args.data_dir_2d,"img",fname+".png"),'rb') as f:
-        img = Image.open(f).convert('L')
-    img = img_transform(img)
-    img = img.unsqueeze(0)
-    saveimg(img,"img_"+fname+".png")
-
-    if mode == 1:
-        with open(os.path.join(args.data_dir_2d,"cls",fname1+".png"),'rb') as f:
-            label = Image.open(f).convert('P')
-            label.putpalette(lab_palette)
-        label.save("lab_"+fname+".png")
-
-"""
-    Visualize the identity transformation
-    img: 1x1xHxW
-"""
-def visualize_img(net,img1,img2,outprefix,gpu):
-    net.eval()
-    img_shape = img1.shape
-
-    if gpu:
-        combimg = Variable(torch.cat((img1,img2),1).cuda())
-    else:
-        combimg = Variable(torch.cat((img1,img2),1))
-
-    disp = net(combimg)
-    disp = nn.Sigmoid()(disp)*2 - 1
-
-    orig_size = disp.size()
-    disp = disp.resize(orig_size[0],orig_size[2],orig_size[3],2)
-
-    grid_img = basegrid(img_shape,gpu) + disp
-    if gpu:
-        img1 = Variable(img1.cuda())
-    else:
-        img1 = Variable(img1)
-    # Image Transformation
-    img1t = F.grid_sample(img1,grid_img)
-    #############
-    ## TODO: Make a row of three images (SOURCE,TRANSFORMED,TARGET)
-    ###########
-    if gpu:
-        x1 = img1[0].data.squeeze(0).cpu().numpy()
-        x2 = img1t[0].data.squeeze(0).cpu().numpy()
-        x3 = img2[0].squeeze(0).cpu().numpy()
-    else:
-        x1 = img1[0].data.squeeze(0).numpy()
-        x2 = img1t[0].data.squeeze(0).numpy()
-        x3 = img2[0].squeeze(0).numpy()
-    ## SAVE THE RESULTS
-    plt.figure(1)
-    plt.subplot(131)
-    plt.imshow(x1,cmap='gray')
-    plt.xticks([])
-    plt.yticks([])
-    plt.subplot(132)
-    plt.imshow(x2,cmap='gray')
-    plt.xticks([])
-    plt.yticks([])
-    plt.subplot(133)
-    plt.imshow(x3,cmap='gray')
-    plt.xticks([])
-    plt.yticks([])
-
-    plt.savefig(os.path.join(os.path.abspath("../brain_img"),outprefix+"_"+val_img_src+'_'+val_img_target+".png"),bbox_inches='tight')
 """
     Make a video from the transformations
 """
@@ -196,26 +124,6 @@ def view_img_transformation(img1,img1t,img2,itr,gpu):
         x_final[:,:w] = x1
         x_final[:,w:2*w] = x2
         x_final[:,2*w:] = x3
-        ## SAVE THE RESULTS
-        # plt.figure(1)
-        # plt.subplot(131)
-        # plt.s(x1,cmap='gray')
-        # plt.title(fname1)
-        # plt.xticks([])
-        # plt.yticks([])
-        #
-        # plt.subplot(132)
-        # plt.imshow(x2,cmap='gray')
-        # plt.xticks([])
-        # plt.yticks([])
-        #
-        # plt.subplot(133)
-        # plt.imshow(x3,cmap='gray')
-        # plt.title(fname2)
-        # plt.xticks([])
-        # plt.yticks([])
-
-        # plt.savefig(os.path.join(os.path.abspath("../brain_img"),str(idx)+str(itr)+".png"),bbox_inches='tight')
         plt.imsave(os.path.join(os.path.abspath("../brain_img"),str(idx)+'_'+str(itr)+".png"), x_final, cmap='gray')
 
 """
@@ -227,7 +135,7 @@ def parse_arguments():
     parser.add_argument("--data_dir_2d",
                         help="Path to data directory for 2d slices")
     parser.add_argument("--data_dir_3d",
-                        help="Path to data dir for 3d vaolumes")
+                        help="Path to data dir for 3d volumes")
     parser.add_argument("--exp_name",
                         help="name of the experiments for prefixing saved models, images and video")
     parser.add_argument("--max_epoch",default=1,type=int,
@@ -253,24 +161,42 @@ def parse_arguments():
     parser.add_argument("--cls_suffix",default="_segTRI_ana.nii.gz",
                         help="Suffix for the classes")
     parser.add_argument("--plot",action="store_true")
+    parser.add_argument("--error_iter",default=500,type=int)
+    parser.add_argument("--simulate",action="store_true")
+    parser.add_argument("--train_s_idx",type=int,default=0)
+    parser.add_argument("--train_e_idx",type=int,default=1000)
+    parser.add_argument("--val_s_idx",type=int,default=5991)
+    parser.add_argument("--val_e_idx",type=int,default=5999)
+    parser.add_argument("--similarity",choices=('l2','cc'),default='cc')
+    parser.add_argument("--log_dir",default="runs")
+    parser.add_argument("--l2_weight",type=float,default=10e-4)
+    parser.add_argument("--nker",type=int,default=8)
     return parser.parse_args()
 
 def main():
     args = parse_arguments()
+    args_str = str(vars(args))
+
+    logger = tbx.SummaryWriter(log_dir = args.log_dir,comment=args.exp_name)
+    logger.add_text('training details',args_str,0)
     #############################################
     # TRAINING DATASET: GENERIC TRANSFORMATION ##
     #############################################
     img_transform = [ToTensorTIF()]
     label_transform = [ToTensorLabel()]
-    trainset = IBSRv1(homedir,args.data_dir_2d,co_transform=Compose([]),
+    if args.simulate:
+        trainset = Sim(args.data_dir_2d,args.train_s_idx,args.train_e_idx,co_transform=Compose([]),
+                    img_transform=Compose(img_transform),label_transform=Compose(label_transform),drop_last=True)
+    else:
+        trainset = IBSRv1(homedir,args.data_dir_2d,co_transform=Compose([]),
                     img_transform=Compose(img_transform),label_transform=Compose(label_transform))
-    trainloader = DataLoader(trainset,batch_size =args.batch_size,drop_last=True)
+    trainloader = DataLoader(trainset,batch_size =args.batch_size,shuffle=True,drop_last=True)
 
     #####################
     # PARAMETER NETWORK #
     ####################
 
-    net = UNet()
+    net = UNetSmall(args.nker)
     if args.gpu:
         net = nn.DataParallel(net).cuda()
 
@@ -278,9 +204,11 @@ def main():
     # OPTIMIZER #
     #############
     opt = optim.Adam(filter(lambda p: p.requires_grad, \
-                net.parameters()),lr = args.lr,weight_decay=0.0001)
+                net.parameters()),lr = args.lr,weight_decay=args.l2_weight)
 
-    ############ GENERATE A BASE GRID USING IDENTITY AFFINE TRANSFORMATION
+    ##################################################################
+    ### GENERATE A BASE GRID USING IDENTITY AFFINE TRANSFORMATION ####
+    ##################################################################
     theta = torch.FloatTensor([1, 0, 0, 0, 1, 0])
     theta = theta.view(2, 3)
     theta = theta.expand(args.batch_size,2,3)
@@ -295,7 +223,7 @@ def main():
     ## TRAINING PROCESS STARTS NOW ##
     #################################
     for epoch in range(args.max_epoch):
-        for batch_id, ((img1,label1,fname1),(img2,label2,fname2),ohlabel1,ohlabel2) in enumerate(trainloader):
+        for batch_id, ((img1,label1,ohlabel1,fname1),(img2,label2,ohlabel2,fname2)) in enumerate(trainloader):
             if img1 is None or label1 is None or img2 is None or label2 is None or ohlabel1 is None:
                 continue
             net.train()
@@ -307,7 +235,7 @@ def main():
             else:
                 img1, label1, img2, label2,combimg, ohlabel1 = Variable(img1), Variable(label1),\
                         Variable(img2), Variable(label2), Variable(torch.cat((img1,img2),1)), Variable(ohlabel1)
-            # disp = net(combimg)
+
             disp = net(combimg)
             orig_size = disp.size()
             n,h,w = (disp.shape[0],disp.shape[2],disp.shape[3])
@@ -318,16 +246,19 @@ def main():
             grid_img = basegrid_img + disp
 
             img1t = F.grid_sample(img1,grid_img)
-            Lsim = nn.MSELoss()(img1t,img2)
+            if args.similarity == 'cc':
+                Lsim = cc(img1t.data,img2.data)
+            elif args.similarity == 'l2':
+                Lsim = nn.MSELoss()(img1t,img2)
 
             if args.plot:
                 view_img_transformation(img1,img1t,img2,itr,args.gpu)
             ###########################
             ### LABEL TRANSFORMATION ##
             ###########################
-            Lseg = Variable(torch.Tensor([0]))
+            Lseg = Variable(torch.Tensor([0]),requires_grad=True)
             if args.gpu:
-                Lseg = Variable(torch.Tensor([0]).cuda())
+                Lseg = Variable(torch.Tensor([0]).cuda(),requires_grad=True)
             if args.lambdaseg != 0:
                 grid_label = basegrid_label + disp
                 cprob2 = F.grid_sample(ohlabel1.float(),grid_label)
@@ -337,6 +268,10 @@ def main():
             ###################
             ## REGULARIZATON ##
             ###################
+            Lreg = Variable(torch.Tensor([0]),requires_grad=True)
+            target = torch.zeros(1)
+            if args.gpu:
+                Lreg = Variable(torch.Tensor([0]).cuda(),requires_grad=True)
             if args.lambdareg != 0:
                 disp = disp.view(-1,2,h,w)
                 dx = torch.abs(disp[:,:,1:,:] -disp[:,:,:-1,:])
@@ -354,10 +289,11 @@ def main():
             ######################
             Ltotal = Lsim + args.lambdareg*Lreg + args.lambdaseg*Lseg
             opt.zero_grad()
-            poly_lr_scheduler(opt, args.lr, itr)
+            opt,lr=poly_lr_scheduler(opt, args.lr, itr,max_iter=len(trainloader)*args.max_epoch)
             Ltotal.backward()
             opt.step()
-
+            logger.add_scalars("Loss",{"Total":Ltotal.data[0],"Similarity":Lsim.data[0],"Regularization":args.lambdareg*Lreg.data[0]},itr)
+            logger.add_scalar("lr",lr,itr)
             # Delete the variables
             free_vars(img1,img2,label1,label2,combimg,ohlabel1,ohlabel2,disp,target,img1t)
             # VISULAIZE THE TRANSFORMATION
@@ -365,10 +301,18 @@ def main():
 
             if args.visualize and (itr % 20 == 0):
                 visualize_img(net,val_img_src_tensor.data,val_img_target_tensor.data,args.exp_name+"_{:05d}".format(itr),args.gpu)
-            print("[{}][{}] Ltotal: {:.6} Lsim: {:.6f} Lseg: {:.6f} Lreg: {:.6f} ".\
-                format(epoch,itr,Ltotal.data[0],Lsim.data[0],args.lambdaseg*(Lseg.data[0]),args.lambdareg*(Lreg.data[0])))
-        validate(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
+
+            if itr % args.error_iter ==0:
+                print("[{}][{}] Ltotal: {:.6} Lsim: {:.6f} Lseg: {:.6f} Lreg: {:.6f} ".\
+                    format(epoch,itr,Ltotal.data[0],Lsim.data[0],args.lambdaseg*(Lseg.data[0]),args.lambdareg*(Lreg.data[0])))
+
+        if args.simulate:
+            score = validate_sim(net,args.data_dir_2d,args.train_s_idx,args.train_e_idx,args.val_s_idx,args.val_e_idx,args.gpu)
+        else:
+            validate(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
+        logger.add_scalars('Dice Scores',{'Class 0': score[0],'Class 1' : score[1],'Class 2': score[2], 'Class 3': score[3]},epoch)
     if args.visualize:
         make_video('{}.mp4'.format(args.exp_name),args.exp_name,keep_imgs=False)
+    logger.close()
 if __name__ == "__main__":
     main()

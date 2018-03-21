@@ -54,7 +54,7 @@ class IBSRv1(Dataset):
 
         ohlabel1 = OneHotEncode()(label1)
         ohlabel2 = OneHotEncode()(label2)
-        return ((img1,label1,fname1),(img2,label2,fname2),ohlabel1,ohlabel2)
+        return ((img1,label1,ohlabel1,fname1),(img2,label2,ohlabel2,fname2))
 
     def __len__(self):
         return len(self.list)
