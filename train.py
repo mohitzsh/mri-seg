@@ -126,6 +126,26 @@ def view_img_transformation(img1,img1t,img2,itr,gpu):
         x_final[:,2*w:] = x3
         plt.imsave(os.path.join(os.path.abspath("../brain_img"),str(idx)+'_'+str(itr)+".png"), x_final, cmap='gray')
 
+def snapshot_path(base_snap_dir,exp,ext='.pth'):
+    return os.path.join(base_snap_dir,exp+ext)
+
+def take_snapshot(best_score,curr_score,opt,net,epoch,snapshot_path):
+    import pdb; pdb.set_trace()
+    if np.any(np.array(curr_score)[1:] > np.array(best_score)[1:]):
+        print("Best score improved for at least one of the foreground class.\n Taking a snapshot")
+        best_score = curr_score
+        snapshot = {
+            'epoch': epoch,
+            'net': net.state_dict(),
+            'best_score': best_score,
+            'optimizer' : opt.state_dict()
+        }
+        torch.save(snapshot,snapshot_path)
+
+    return best_score
+
+
+
 """
     Parse Arguments
 """
@@ -136,10 +156,13 @@ def parse_arguments():
                         help="Path to data directory for 2d slices")
     parser.add_argument("--data_dir_3d",
                         help="Path to data dir for 3d volumes")
+    parser.add_argument("--snapshot_dir")
+    parser.add_argument("--resume")
     parser.add_argument("--exp_name",
                         help="name of the experiments for prefixing saved models, images and video")
     parser.add_argument("--max_epoch",default=1,type=int,
                         help="Max epochs for training")
+    parser.add_argument("--start_epoch",default=0,type=int)
     parser.add_argument("--gpu",action='store_true',
                         help="GPU training")
     parser.add_argument("--lr",default=0.0001,type=float,
@@ -186,7 +209,7 @@ def main():
     label_transform = [ToTensorLabel()]
     if args.simulate:
         trainset = Sim(args.data_dir_2d,args.train_s_idx,args.train_e_idx,co_transform=Compose([]),
-                    img_transform=Compose(img_transform),label_transform=Compose(label_transform),drop_last=True)
+                    img_transform=Compose(img_transform),label_transform=Compose(label_transform))
     else:
         trainset = IBSRv1(homedir,args.data_dir_2d,co_transform=Compose([]),
                     img_transform=Compose(img_transform),label_transform=Compose(label_transform))
@@ -219,15 +242,34 @@ def main():
     basegrid_img = F.affine_grid(theta,torch.Size((args.batch_size,1,H,W)))
     basegrid_label = F.affine_grid(theta,torch.Size((args.batch_size,nclasses,H,W)))
 
+    best_score = [0,0,0,0]
+
+    ##############################################
+    # Resume training is args.resume is not None #
+    ##############################################
+    if args.resume is not None:
+        print("Resuming Training from {}".format(args.resume))
+        snapshot = torch.load(args.resume)
+        args.start_epoch = snapshot['epoch']
+        best_score = snapshot['best_score']
+        net.load_state_dict(snapshot['net'])
+        opt.load_state_dict(snapshot['optimizer'])
+    else:
+        print("No Checkpoint Found")
+
+
     #################################
     ## TRAINING PROCESS STARTS NOW ##
     #################################
-    for epoch in range(args.max_epoch):
+    for epoch in np.arange(args.start_epoch,args.max_epoch):
         for batch_id, ((img1,label1,ohlabel1,fname1),(img2,label2,ohlabel2,fname2)) in enumerate(trainloader):
             if img1 is None or label1 is None or img2 is None or label2 is None or ohlabel1 is None:
                 continue
             net.train()
             itr = len(trainloader)*(epoch) + batch_id
+            ####################
+            # Debug Snapshot code
+            #################
             if args.gpu:
                 img1, label1, img2, label2,combimg,ohlabel1 = Variable(img1.cuda()),\
                         Variable(label1.cuda()), Variable(img2.cuda()), Variable(label2.cuda()),\
@@ -299,8 +341,8 @@ def main():
             # VISULAIZE THE TRANSFORMATION
 
 
-            if args.visualize and (itr % 20 == 0):
-                visualize_img(net,val_img_src_tensor.data,val_img_target_tensor.data,args.exp_name+"_{:05d}".format(itr),args.gpu)
+            # if args.visualize and (itr % 20 == 0):
+            #     visualize_img(net,val_img_src_tensor.data,val_img_target_tensor.data,args.exp_name+"_{:05d}".format(itr),args.gpu)
 
             if itr % args.error_iter ==0:
                 print("[{}][{}] Ltotal: {:.6} Lsim: {:.6f} Lseg: {:.6f} Lreg: {:.6f} ".\
@@ -310,6 +352,10 @@ def main():
             score = validate_sim(net,args.data_dir_2d,args.train_s_idx,args.train_e_idx,args.val_s_idx,args.val_e_idx,args.gpu)
         else:
             validate(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
+
+        # Compare the current result to the best result and take a snapshot
+        best_score = take_snapshot(best_score,score,opt,net,epoch,snapshot_path(args.snapshot_path,args.exp_name))
+
         logger.add_scalars('Dice Scores',{'Class 0': score[0],'Class 1' : score[1],'Class 2': score[2], 'Class 3': score[3]},epoch)
     if args.visualize:
         make_video('{}.mp4'.format(args.exp_name),args.exp_name,keep_imgs=False)
