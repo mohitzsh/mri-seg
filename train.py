@@ -39,6 +39,7 @@ homedir = os.path.dirname(os.path.realpath(__file__))
 H = 218
 W = 182
 nclasses = 4
+w_init = None
 train_vols = ['IBSR_01','IBSR_02','IBSR_03','IBSR_04','IBSR_05',
                 'IBSR_06','IBSR_07','IBSR_08','IBSR_09','IBSR_10',
             'IBSR_11','IBSR_12','IBSR_13','IBSR_14']
@@ -138,7 +139,16 @@ def take_snapshot(best_score,curr_score,opt,net,epoch,snapshot_path):
 
     return best_score
 
-
+def weight_init(m):
+    if isinstance(m,nn.Conv2d):
+        if w_init == "xavier_uniform":
+            nn.init.xavier_uniform(m.weight.data)
+        elif w_init == "xavier_normal":
+            nn.init.xavier_normal(m.weight.data)
+        elif w_init == "he_uniform":
+            nn.init.kaiming_uniform(m.weight.data,mode='fan_out')
+        elif w_init =="he_normal":
+            nn.init.kaiming_normal(m.weight.data,mode='fan_out')
 
 """
     Parse Arguments
@@ -188,12 +198,16 @@ def parse_arguments():
     parser.add_argument("--log_dir",default="runs")
     parser.add_argument("--l2_weight",type=float,default=10e-4)
     parser.add_argument("--nker",type=int,default=8)
+    parser.add_argument("--step_lr_step_size",type=int,default=1)
+    parser.add_argument("--step_lr_gamma",type=float,default=0.1)
+    parser.add_argument("--weight_init",choices=('default','xavier_uniform','xavier_normal','he_uniform','he_normal'),default='default')
     return parser.parse_args()
 
 def main():
     args = parse_arguments()
     args_str = str(vars(args))
-
+    global w_init
+    w_init = args.weight_init
     logger = tbx.SummaryWriter(log_dir = args.log_dir,comment=args.exp_name)
     logger.add_text('training details',args_str,0)
     #############################################
@@ -216,6 +230,8 @@ def main():
     net = UNetSmall(args.nker)
     if args.gpu:
         net = nn.DataParallel(net).cuda()
+
+    net.apply(weight_init)
 
     #############
     # OPTIMIZER #
@@ -241,7 +257,7 @@ def main():
     ##############################################
     # Resume training is args.resume is not None #
     ##############################################
-    scheduler = StepLR(opt, step_size=5, gamma=0.1)
+    scheduler = StepLR(opt, step_size=args.step_lr_step_size, gamma=args.step_lr_gamma)
     if args.resume is not None:
         print("Resuming Training from {}".format(args.resume))
         snapshot = torch.load(args.resume)
