@@ -104,18 +104,59 @@ def validate(net,
 
     predictions = None
     gt = None
+    tvol_img_dict = {}
+    tvol_img_affine_dict = {}
+    tvol_cls_dict = {}
+    tvol_cls_affine_dict = {}
+    vvol_img_dict = {}
+    vvol_img_affine_dict = {}
+    vvol_cls_dict = {}
+    vvol_cls_affine_dict = {}
+
     for tvolname in train_vols:
         tvol_img = nib.load(os.path.join(data_dir,"img",tvolname+img_suffix))
         tvol_cls = nib.load(os.path.join(data_dir,"cls",tvolname+cls_suffix))
 
         tvol_img_affine = tvol_img.affine
-        tvol_img = tvol_img.get_data()
-
         tvol_cls_affine = tvol_cls.affine
-        tvol_cls = tvol_cls.get_data()
 
+        tvol_img = tvol_img.get_data()
+        tvol_cls = tvol_cls.get_data()
+        
         tvol_img = torch.from_numpy(np.transpose(tvol_img,perm)).float()
         tvol_cls = torch.from_numpy(np.transpose(tvol_cls,perm)).float()
+
+        tvol_img_dict[tvolname] = tvol_img
+        tvol_cls_dict[tvolname] = tvol_cls
+        tvol_img_affine_dict[tvolname] = tvol_img_affine
+        tvol_cls_affine_dict[tvolname] = tvol_cls_affine
+
+    for vvolname in val_vols:
+        vvol_img = nib.load(os.path.join(data_dir,"img",vvolname+img_suffix))
+        vvol_cls = nib.load(os.path.join(data_dir,"cls",vvolname+cls_suffix))
+
+        vvol_img_affine = vvol_img.affine
+        vvol_img = vvol_img.get_data()
+
+        vvol_cls_affine = vvol_cls.affine
+        vvol_cls = vvol_cls.get_data()
+
+        vvol_img = np.transpose(vvol_img,perm)
+        vvol_cls = np.transpose(vvol_cls,perm)
+
+        vvol_img = torch.from_numpy(vvol_img).float()
+        vvol_cls = torch.from_numpy(vvol_cls).float()
+
+        vvol_img_dict[vvolname] = vvol_img
+        vvol_cls_dict[vvolname] = vvol_cls
+        vvol_img_affine_dict[vvolname] = vvol_img_affine
+        vvol_cls_affine_dict[vvolname] = vvol_cls_affine
+
+
+
+    for tvolname in train_vols:
+        tvol_img = tvol_img_dict[tvolname]
+        tvol_cls = tvol_cls_dict[tvolname]
 
         if predictions is None:
             predictions = torch.zeros((len(val_vols),nclasses,) + tvol_img.size()).byte()
@@ -125,20 +166,8 @@ def validate(net,
             tvol_cls = tvol_cls.cuda()
         for vvol_idx,vvolname in enumerate(val_vols):
 
-            vvol_img = nib.load(os.path.join(data_dir,"img",vvolname+img_suffix))
-            vvol_cls = nib.load(os.path.join(data_dir,"cls",vvolname+cls_suffix))
-
-            vvol_img_affine = vvol_img.affine
-            vvol_img = vvol_img.get_data()
-
-            vvol_cls_affine = vvol_cls.affine
-            vvol_cls = vvol_cls.get_data()
-
-            vvol_img = np.transpose(vvol_img,perm)
-            vvol_cls = np.transpose(vvol_cls,perm)
-
-            vvol_img = torch.from_numpy(vvol_img).float()
-            vvol_cls = torch.from_numpy(vvol_cls).float()
+            vvol_img = vvol_img_dict[vvolname]
+            vvol_cls = vvol_cls_dict[vvolname]
 
             gt[vvol_idx] = vvol_cls
 
@@ -150,8 +179,8 @@ def validate(net,
             predictions[vvol_idx] += out_cls_oh
     _,predictions = torch.max(predictions,dim=1)
 
-    score = dice_score(gt.numpy(),predictions.numpy(),nclasses)
-    print(score)
+    return  np.mean(dice_score(gt.numpy(),predictions.numpy(),nclasses),axis=1)
+
 
 def validate_sim(net,data_dir,train_s_idx,train_e_idx,val_s_idx,val_e_idx,gpu):
     global GPU

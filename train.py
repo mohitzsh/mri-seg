@@ -32,6 +32,7 @@ import subprocess
 from utils.validate import validate
 from utils.validate import validate_sim
 import tensorboardX as tbx
+from torch.optim.lr_scheduler import StepLR
 
 homedir = os.path.dirname(os.path.realpath(__file__))
 
@@ -92,12 +93,6 @@ def basegrid(size,gpu):
         theta = Variable(theta)
     return F.affine_grid(theta,torch.Size(size))
 
-def snapshot(model,prefix,snapshot_dir):
-    snapshot = {
-        'model' : model.state_dict()
-    }
-    torch.save(snapshot,os.path.join(snapshot_dir,"{}.pth.tar").format(prefix))
-
 def free_vars(*args):
     for var in list(args):
         if var is not None:
@@ -130,7 +125,6 @@ def snapshot_path(base_snap_dir,exp,ext='.pth'):
     return os.path.join(base_snap_dir,exp+ext)
 
 def take_snapshot(best_score,curr_score,opt,net,epoch,snapshot_path):
-    import pdb; pdb.set_trace()
     if np.any(np.array(curr_score)[1:] > np.array(best_score)[1:]):
         print("Best score improved for at least one of the foreground class.\n Taking a snapshot")
         best_score = curr_score
@@ -247,6 +241,7 @@ def main():
     ##############################################
     # Resume training is args.resume is not None #
     ##############################################
+    scheduler = StepLR(opt, step_size=5, gamma=0.1)
     if args.resume is not None:
         print("Resuming Training from {}".format(args.resume))
         snapshot = torch.load(args.resume)
@@ -262,6 +257,7 @@ def main():
     ## TRAINING PROCESS STARTS NOW ##
     #################################
     for epoch in np.arange(args.start_epoch,args.max_epoch):
+        scheduler.step()
         for batch_id, ((img1,label1,ohlabel1,fname1),(img2,label2,ohlabel2,fname2)) in enumerate(trainloader):
             if img1 is None or label1 is None or img2 is None or label2 is None or ohlabel1 is None:
                 continue
@@ -293,8 +289,7 @@ def main():
             elif args.similarity == 'l2':
                 Lsim = nn.MSELoss()(img1t,img2)
 
-            if args.plot:
-                view_img_transformation(img1,img1t,img2,itr,args.gpu)
+
             ###########################
             ### LABEL TRANSFORMATION ##
             ###########################
@@ -331,18 +326,16 @@ def main():
             ######################
             Ltotal = Lsim + args.lambdareg*Lreg + args.lambdaseg*Lseg
             opt.zero_grad()
-            opt,lr=poly_lr_scheduler(opt, args.lr, itr,max_iter=len(trainloader)*args.max_epoch)
+            # opt,lr=poly_lr_scheduler(opt, args.lr, itr,max_iter=len(trainloader)*args.max_epoch)
             Ltotal.backward()
             opt.step()
+
             logger.add_scalars("Loss",{"Total":Ltotal.data[0],"Similarity":Lsim.data[0],"Regularization":args.lambdareg*Lreg.data[0]},itr)
-            logger.add_scalar("lr",lr,itr)
+            # logger.add_scalar("lr",lr,itr)
+
             # Delete the variables
             free_vars(img1,img2,label1,label2,combimg,ohlabel1,ohlabel2,disp,target,img1t)
-            # VISULAIZE THE TRANSFORMATION
 
-
-            # if args.visualize and (itr % 20 == 0):
-            #     visualize_img(net,val_img_src_tensor.data,val_img_target_tensor.data,args.exp_name+"_{:05d}".format(itr),args.gpu)
 
             if itr % args.error_iter ==0:
                 print("[{}][{}] Ltotal: {:.6} Lsim: {:.6f} Lseg: {:.6f} Lreg: {:.6f} ".\
@@ -351,11 +344,10 @@ def main():
         if args.simulate:
             score = validate_sim(net,args.data_dir_2d,args.train_s_idx,args.train_e_idx,args.val_s_idx,args.val_e_idx,args.gpu)
         else:
-            validate(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
+            score = validate(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
 
         # Compare the current result to the best result and take a snapshot
-        best_score = take_snapshot(best_score,score,opt,net,epoch,snapshot_path(args.snapshot_path,args.exp_name))
-
+        best_score = take_snapshot(best_score,score,opt,net,epoch,snapshot_path(args.snapshot_dir,args.exp_name))
         logger.add_scalars('Dice Scores',{'Class 0': score[0],'Class 1' : score[1],'Class 2': score[2], 'Class 3': score[3]},epoch)
     if args.visualize:
         make_video('{}.mp4'.format(args.exp_name),args.exp_name,keep_imgs=False)
