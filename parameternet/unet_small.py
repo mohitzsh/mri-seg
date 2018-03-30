@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-weight_init = None
 class double_conv(nn.Module):
     '''(conv => BN => ReLU) * 2'''
     def __init__(self, in_ch, out_ch):
@@ -16,6 +15,7 @@ class double_conv(nn.Module):
             nn.BatchNorm2d(out_ch),
             nn.LeakyReLU(negative_slope=0.01,inplace=True)
         )
+
 
     def forward(self, x):
         x = self.conv(x)

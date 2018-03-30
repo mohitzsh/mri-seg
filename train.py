@@ -11,6 +11,7 @@ from utils.transforms import ToTensorTIF
 from torch.utils.data import DataLoader
 from datasets.ibsr1 import IBSRv1
 from datasets.ibsr2 import IBSRv2
+from datasets.mrbrains import MRBrainS
 from datasets.sim import Sim
 from parameternet.parameternet import ParaNet
 from parameternet.unet import UNet
@@ -29,15 +30,16 @@ from torchvision.transforms import ToPILImage
 import matplotlib.pyplot as plt
 from PIL import Image
 import subprocess
-from utils.validate import validate
+from utils.validate import validate_ibsr
 from utils.validate import validate_sim
+from utils.validate import validate_mrbrains
 import tensorboardX as tbx
 from torch.optim.lr_scheduler import StepLR
 
 homedir = os.path.dirname(os.path.realpath(__file__))
 
-H = 218
-W = 182
+H = 229
+W = 193
 nclasses = 4
 w_init = None
 train_vols = ['IBSR_01','IBSR_02','IBSR_03','IBSR_04','IBSR_05',
@@ -88,10 +90,12 @@ def basegrid(size,gpu):
     theta = torch.FloatTensor([1, 0, 0, 0, 1, 0])
     theta = theta.view(2, 3)
     theta = theta.expand(size[0],2,3)
-    if gpu:
-        theta = Variable(theta.cuda())
-    else:
-        theta = Variable(theta)
+
+    if torch.cuda.is_available():
+        theta = theta.cuda()
+
+    theta = Variable(theta)
+
     return F.affine_grid(theta,torch.Size(size))
 
 def free_vars(*args):
@@ -160,6 +164,7 @@ def parse_arguments():
                         help="Path to data directory for 2d slices")
     parser.add_argument("--data_dir_3d",
                         help="Path to data dir for 3d volumes")
+    parser.add_argument("--dataset",choices=("ibsr","sim","mrbrains"),default="mrbrains")
     parser.add_argument("--snapshot_dir")
     parser.add_argument("--resume")
     parser.add_argument("--exp_name",
@@ -215,22 +220,25 @@ def main():
     #############################################
     img_transform = [ToTensorTIF()]
     label_transform = [ToTensorLabel()]
-    if args.simulate:
+    if args.dataset == "sim":
         trainset = Sim(args.data_dir_2d,args.train_s_idx,args.train_e_idx,co_transform=Compose([]),
                     img_transform=Compose(img_transform),label_transform=Compose(label_transform))
-    else:
+    if args.dataset == "ibsr":
         trainset = IBSRv1(homedir,args.data_dir_2d,co_transform=Compose([]),
                     img_transform=Compose(img_transform),label_transform=Compose(label_transform))
+    if args.dataset == "mrbrains":
+        trainset = MRBrainS(homedir,args.data_dir_2d,co_transform=Compose([]),
+                    img_transform=Compose(img_transform),label_transform=Compose(label_transform))
     trainloader = DataLoader(trainset,batch_size =args.batch_size,shuffle=True,drop_last=True)
-
+    print("Dataset Loaded")
     #####################
     # PARAMETER NETWORK #
     ####################
 
     net = UNetSmall(args.nker)
-    if args.gpu:
+    if torch.cuda.is_available():
         net = nn.DataParallel(net).cuda()
-
+    print("Network Loaded")
     net.apply(weight_init)
 
     #############
@@ -245,10 +253,10 @@ def main():
     theta = torch.FloatTensor([1, 0, 0, 0, 1, 0])
     theta = theta.view(2, 3)
     theta = theta.expand(args.batch_size,2,3)
-    if args.gpu:
-        theta = Variable(theta.cuda())
-    else:
-        theta = Variable(theta)
+    if torch.cuda.is_available():
+        theta = theta.cuda()
+
+    theta = Variable(theta)
     basegrid_img = F.affine_grid(theta,torch.Size((args.batch_size,1,H,W)))
     basegrid_label = F.affine_grid(theta,torch.Size((args.batch_size,nclasses,H,W)))
 
@@ -267,11 +275,14 @@ def main():
         opt.load_state_dict(snapshot['optimizer'])
     else:
         print("No Checkpoint Found")
-
-
     #################################
     ## TRAINING PROCESS STARTS NOW ##
     #################################
+
+
+    ##############
+    # debug the mrbrains validation code
+    score = validate_mrbrains(net,args.data_dir_3d,[1,2,3],[4],logger,0)
     for epoch in np.arange(args.start_epoch,args.max_epoch):
         scheduler.step()
         for batch_id, ((img1,label1,ohlabel1,fname1),(img2,label2,ohlabel2,fname2)) in enumerate(trainloader):
@@ -282,7 +293,7 @@ def main():
             ####################
             # Debug Snapshot code
             #################
-            if args.gpu:
+            if torch.cuda.is_available():
                 img1, label1, img2, label2,combimg,ohlabel1 = Variable(img1.cuda()),\
                         Variable(label1.cuda()), Variable(img2.cuda()), Variable(label2.cuda()),\
                         Variable(torch.cat((img1,img2),1).cuda()), Variable(ohlabel1.cuda())
@@ -357,14 +368,15 @@ def main():
                 print("[{}][{}] Ltotal: {:.6} Lsim: {:.6f} Lseg: {:.6f} Lreg: {:.6f} ".\
                     format(epoch,itr,Ltotal.data[0],Lsim.data[0],args.lambdaseg*(Lseg.data[0]),args.lambdareg*(Lreg.data[0])))
 
-        if args.simulate:
+        if args.dataset == "sim":
             score = validate_sim(net,args.data_dir_2d,args.train_s_idx,args.train_e_idx,args.val_s_idx,args.val_e_idx,args.gpu)
-        else:
-            score = validate(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
-
+        if args.dataset == "ibsr":
+            score = validate_ibsr(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
+        if args.dataset == "mrbrains":
+            score = validate_mrbrains(net,args.data_dir_3d,[1,2,3],[4],logger,epoch)
         # Compare the current result to the best result and take a snapshot
         best_score = take_snapshot(best_score,score,opt,net,epoch,snapshot_path(args.snapshot_dir,args.exp_name))
-        logger.add_scalars('Dice Scores',{'Class 0': score[0],'Class 1' : score[1],'Class 2': score[2], 'Class 3': score[3]},epoch)
+        logger.add_scalars('Dice Scores Overall',{'1' : score[1],'2': score[2], '3': score[3]},epoch)
     if args.visualize:
         make_video('{}.mp4'.format(args.exp_name),args.exp_name,keep_imgs=False)
     logger.close()

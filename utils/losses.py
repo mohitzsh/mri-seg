@@ -1,6 +1,7 @@
 import torch
 from torch.autograd import Variable
 import torch.nn.functional as F
+import numpy as np
 
 """
     in1 : Nx1xHxW
@@ -30,4 +31,9 @@ def cc(I,J,n=9,eps=10e-5):
     denom2 = (J2_sum + J_mean*J_mean*n*n - 2*J_mean*J_sum)
 
     denom = denom1*denom2
-    return -1.0*torch.log(torch.mean(num/(denom+eps)))
+    # filter out negative values
+    denom[denom<0] = 0
+    loss = -1.0*torch.log(torch.mean(num[denom > 1] /denom[denom > 1]))
+    # Check for regions where std of any one of I or J is zero
+    # cc for that reqion is assigned a value 0.
+    return loss

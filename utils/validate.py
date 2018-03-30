@@ -21,17 +21,33 @@ nclasses = 4
 IMG_SUFFIX = "_ana_strip.nii.gz"
 CLS_SUFFIX = "_segTRI_ana.nii.gz"
 
+perm = (2,1,0)
+
+mrbrains_train_img_dict = {}
+mrbrains_train_cls_dict = {}
+mrbrains_val_img_dict = {}
+mrbrains_val_cls_dict = {}
+
 def save_vol(data,affine,path):
     img = nib.Nifti1Image(data, affine)
     nib.save(img, path)
 
+def read_vol(fname):
+    img = nib.load(fname)
+    data = img.get_data()
+    affine = img.affine
+    return data,affine
+
 def basegrid(shape):
+    batch_size = shape[0]
     theta = torch.FloatTensor([1, 0, 0, 0, 1, 0])
     theta = theta.view(2, 3)
-    theta = theta.expand(1,2,3)
-    grid = F.affine_grid(theta,shape)
-    if GPU:
-        return grid.cuda()
+    theta = theta.expand(1,2,3).repeat(batch_size,1,1)
+
+    grid = F.affine_grid(Variable(theta),torch.Size(shape))
+
+    if torch.cuda.is_available():
+        grid = grid.cuda()
     return grid
 
 def generate_grid(net,combslice):
@@ -68,7 +84,7 @@ def transform_vols(img1,img2,cls1,cls2,net):
 
         clsslice1_oh = OneHotEncode()(clsslice1.unsqueeze(0)).float()
         clsslice2_oh = OneHotEncode()(clsslice2.unsqueeze(0)).float()
-        if GPU:
+        if torch.cuda.is_available():
             clsslice1_oh = clsslice1_oh.cuda()
             clsslice2_oh = clsslice2_oh.cuda()
         combslice = torch.cat((imgslice1.unsqueeze(0),imgslice2.unsqueeze(0)),dim=0)
@@ -90,7 +106,7 @@ def transform_vols(img1,img2,cls1,cls2,net):
 """
     val_volume is the list of volumes to validate
 """
-def validate(net,
+def validate_ibsr(net,
             data_dir,
             train_vols,
             val_vols,
@@ -122,7 +138,7 @@ def validate(net,
 
         tvol_img = tvol_img.get_data()
         tvol_cls = tvol_cls.get_data()
-        
+
         tvol_img = torch.from_numpy(np.transpose(tvol_img,perm)).float()
         tvol_cls = torch.from_numpy(np.transpose(tvol_cls,perm)).float()
 
@@ -252,9 +268,279 @@ def validate_sim(net,data_dir,train_s_idx,train_e_idx,val_s_idx,val_e_idx,gpu):
     score = np.average(score,axis=0)
     return score
 
+"""
+    Load the validation and training data once.
+    mrbrains_train_img_dict
+        "subject"
+            "t1":
+                "orig":
+                "proc"
+            "t1_ir":
+                "orig":
+                "proc":
+            "t2"
+                "orig":
+                "proc"
+    mrbrains_train_cls_dict
+    mrbrains_val_img_dict
+    mrbrains_val_cls_dict
+"""
+def load_mrbrains_dataset(data_dir,train_subjects,val_subjects):
+    global mrbrains_train_img_dict
+    global mrbrains_train_cls_dict
+    global mrbrains_val_img_dict
+    global mrbrains_val_cls_dict
 
+    if len(mrbrains_train_img_dict) ==0:
+        for sj in train_subjects:
+            # Load all modalities and processing extent for images
+            t1_orig = str(sj) + '_0_0.nii' # t1_sgauss
+            t1_proc = str(sj) + '_0_1.nii' # t1_complete
+            t1_ir_orig = str(sj) + '_1_0.nii' # t1_ir_sgauss
+            t1_ir_proc = str(sj) + '_1_1.nii' #t1_ir_complete
+            t2_orig = str(sj) + '_2_0.nii' # t2_sgauss
+            t2_proc = str(sj) + '_2_1.nii' # t2_complete
 
+            # Add t1 volumes
+            mrbrains_train_img_dict[str(sj)] = {}
+            mrbrains_train_img_dict[str(sj)]["t1"] = {}
+            mrbrains_train_img_dict[str(sj)]["t1_ir"] = {}
+            mrbrains_train_img_dict[str(sj)]["t2"] = {}
 
+            tpath = os.path.join(data_dir,"img",t1_orig)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_train_img_dict[str(sj)]["t1"]["orig"] = data
+
+            tpath = os.path.join(data_dir,"img",t1_proc)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_train_img_dict[str(sj)]["t1"]["proc"] = data
+
+            # add t1_ir volumes
+            tpath = os.path.join(data_dir,"img",t1_ir_orig)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_train_img_dict[str(sj)]["t1_ir"]["orig"] = data
+
+            tpath = os.path.join(data_dir,"img",t1_ir_proc)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_train_img_dict[str(sj)]["t1_ir"]["proc"] = data
+
+            # add t2 volume
+            tpath = os.path.join(data_dir,"img",t2_orig)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_train_img_dict[str(sj)]["t2"]["orig"] = data
+
+            tpath = os.path.join(data_dir,"img",t2_proc)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_train_img_dict[str(sj)]["t2"]["proc"] = data
+
+            # Load the cls file
+            tcls = str(sj)+str(sj)+'.nii'
+            tclspath = os.path.join(data_dir,"cls",tcls)
+            data,_ = read_vol(tclspath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).long()
+
+            mrbrains_train_cls_dict[str(sj)] = data
+        for sj in val_subjects:
+            # Load all modalities and processing extent for images
+            t1_orig = str(sj) + '_0_0.nii' # t1_sgauss
+            t1_proc = str(sj) + '_0_1.nii' # t1_complete
+            t1_ir_orig = str(sj) + '_1_0.nii' # t1_ir_sgauss
+            t1_ir_proc = str(sj) + '_1_1.nii' #t1_ir_complete
+            t2_orig = str(sj) + '_2_0.nii' # t2_sgauss
+            t2_proc = str(sj) + '_2_1.nii' # t2_complete
+
+            # Add t1 volumes
+            mrbrains_val_img_dict[str(sj)] = {}
+            mrbrains_val_img_dict[str(sj)]["t1"] = {}
+            mrbrains_val_img_dict[str(sj)]["t1_ir"] = {}
+            mrbrains_val_img_dict[str(sj)]["t2"] = {}
+
+            tpath = os.path.join(data_dir,"img",t1_orig)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_val_img_dict[str(sj)]["t1"]["orig"] = data
+
+            tpath = os.path.join(data_dir,"img",t1_proc)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_val_img_dict[str(sj)]["t1"]["proc"] = data
+
+            # add t1_ir volumes
+            tpath = os.path.join(data_dir,"img",t1_ir_orig)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_val_img_dict[str(sj)]["t1_ir"]["orig"] = data
+
+            tpath = os.path.join(data_dir,"img",t1_ir_proc)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_val_img_dict[str(sj)]["t1_ir"]["proc"] = data
+
+            # add t2 volume
+            tpath = os.path.join(data_dir,"img",t2_orig)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_val_img_dict[str(sj)]["t2"]["orig"] = data
+
+            tpath = os.path.join(data_dir,"img",t2_proc)
+            data,_ = read_vol(tpath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).float()
+            mrbrains_val_img_dict[str(sj)]["t2"]["proc"] = data
+
+            # Load the cls file
+            tcls = str(sj)+str(sj)+'.nii'
+            tclspath = os.path.join(data_dir,"cls",tcls)
+            data,_ = read_vol(tclspath)
+            data = np.transpose(data,perm)
+            data = torch.from_numpy(data).long()
+
+            mrbrains_val_cls_dict[str(sj)] = data
+"""
+    Combine two mri volumes to transform the entire vol1 to vol2 in single forward pass.
+"""
+def combine_vol(vol1,vol2):
+    if torch.cuda.is_available():
+        if not vol1.is_cuda:
+            vol1 = vol1.cuda()
+        if not vol2.is_cuda:
+            vol2 = vol2.cuda()
+
+    # combine vol1 and vol2 as a minibatch along z direction
+    shape = vol1.shape
+    combvol = torch.zeros((shape[0],)+(2,)+shape[1:]).float()
+    if torch.cuda.is_available():
+        combvol = combvol.cuda()
+    combvol[:,0,:,:] = vol1
+    combvol[:,1,:,:] = vol2
+
+    return combvol
+"""
+    combine img1 and img2 using combine_vol, forward pass through net, generate displacement vectors,
+    apply F.grid_sample on the img1 and cls1
+"""
+def transform_faster(img1,img2,cls1,net):
+    net.eval()
+
+    combimg = combine_vol(img1,img2) # Dx2xHxW
+
+    # Generate transformation field
+    basegrid_img = basegrid((combimg.shape[0],1,)+img1.shape[1:])
+    basegrid_cls = basegrid((combimg.shape[0],nclasses,)+img1.shape[1:])
+    disp = generate_grid(net,combimg)
+    grid_cls = disp + basegrid_cls
+    grid_img = disp + basegrid_img
+
+    # One hot encoded class labels
+    # This only works for 3d vols
+    # given a vol with shape DxHxW, cl1_oh will be DxCxHxW
+    idx = np.arange(nclasses).reshape(nclasses,1)[:,:,None]
+    idx = torch.from_numpy(idx).long()
+    if torch.cuda.is_available():
+        idx = idx.cuda()
+    cl1_oh = (cls1[:,None,:,:] == idx)
+
+    # Transform labels
+    cls1oht = F.grid_sample(Variable(cl1_oh.float()),grid_cls)
+    img1t = F.grid_sample(Variable(img1[:,None,:,:]),grid_cls)
+
+    return img1t.data,cls1oht.data.long(),disp.data
+
+"""
+    Register all validation subjects for a given modality and data_processing
+    returns:
+        All of these are tensors, V is #validation vols, T is #training volumes
+
+        predictions: VxDxHxW
+        gt : VxDxHxW
+        scores : 4,
+        transformation_field : VxTxDxHxWx2
+"""
+def register_mrbrains(net,train_subjects,val_subjects,modality,data_proc):
+    global mrbrains_train_img_dict
+    global mrbrains_train_cls_dict
+    global mrbrains_val_img_dict
+    global mrbrains_val_cls_dict
+
+    predictions = None
+    gt = None
+    transformation_field = None
+    for vidx,vj in enumerate(val_subjects):
+        val_cls = mrbrains_val_cls_dict[str(vj)]
+        if predictions is None:
+            predictions = torch.zeros((len(val_subjects),)+val_cls.shape)
+            gt = torch.zeros((len(val_subjects),)+val_cls.shape)
+            transformation_field = torch.zeros((len(val_subjects),len(train_subjects),)+val_cls.shape + (2,))
+            if torch.cuda.is_available():
+                predictions = predictions.cuda()
+                gt = gt.cuda()
+                transformation_field = transformation_field.cuda()
+        gt[vidx] = val_cls
+        for mod_val in modality:
+            for proc_val in data_proc:
+                val_t1_img = mrbrains_val_img_dict[str(vj)][mod_val][proc_val]
+                prediction = torch.zeros((nclasses,)+val_cls.shape).long()
+                if torch.cuda.is_available():
+                    val_t1_img = val_t1_img.cuda()
+                    prediction = prediction.cuda()
+                for tidx,tj in enumerate(train_subjects):
+                    train_cls = mrbrains_train_cls_dict[str(tj)]
+                    for mod_train in modality:
+                        for proc_train in data_proc:
+                            train_t1_img = mrbrains_train_img_dict[str(tj)][mod_train][proc_train]
+                            if torch.cuda.is_available():
+                                train_cls = train_cls.cuda()
+                                train_t1_img = train_t1_img.cuda()
+                            _,val_t1_cls_oht,disp  = transform_faster(train_t1_img,val_t1_img,train_cls,net)
+                            transformation_field[vidx,tidx] = disp
+                            prediction += val_t1_cls_oht
+        _,prediction = torch.max(prediction,dim=0)
+        predictions[vidx] = prediction
+    if torch.cuda.is_available():
+        predictions = predictions.cpu()
+        gt = gt.cpu()
+    score = torch.from_numpy(dice_score(gt.numpy(),predictions.numpy(),nclasses))
+    if torch.cuda.is_available():
+        predictions = predictions.cuda()
+        predictions = predictions.cuda()
+        score = score.cuda()
+
+    score = torch.mean(score,dim=0,keepdim=True)
+    return predictions,gt,score[0],transformation_field
+
+def validate_mrbrains(net,data_dir,train_subjects,val_subjects,logger,epoch):
+    load_mrbrains_dataset(data_dir,train_subjects,val_subjects)
+
+    # Use scores from all modalities separately for processed data
+    predictions_t1, gt, score_t1, field_t1 = register_mrbrains(net,train_subjects,val_subjects,["t1"],["proc"])
+    predictions_t1_ir,_,score_t1_ir,field_t1_ir = register_mrbrains(net,train_subjects,val_subjects,["t1_ir"],["proc"])
+    predictions_t2,_,score_t2,field_t2 = register_mrbrains(net,train_subjects,val_subjects,["t2"],["proc"])
+    # Add these scores to the logger
+    logger.add_scalars('Dice Scores t1',{'1' : score_t1[1],'2': score_t1[2], '3': score_t1[3]},epoch)
+    logger.add_scalars('Dice Scores t1_ir',{'1' : score_t1_ir[1],'2': score_t1_ir[2], '3': score_t1_ir[3]},epoch)
+    logger.add_scalars('Dice Scores t2',{'1' : score_t2[1],'2': score_t2[2], '3': score_t2[3]},epoch)
+
+    # visualize, the distribution of the displacement field
+
+    return score_t1
 
 def parse_arguments():
     # TODO: Add argument to use a trained model
