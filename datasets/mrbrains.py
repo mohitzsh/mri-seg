@@ -51,6 +51,8 @@ def load_data(filename,datadir,co_transform,img_transform,label_transform):
     img_dict = {}
     label_dict = {}
     oh_label_dict = {}
+    idx = np.arange(4).reshape(4,1)[:,:,None]
+    idx = torch.from_numpy(idx).long()
     for name in names:
         cls_name = name.split("_")[0] + '_' + name.split("_")[-1]
         assert(os.path.exists(os.path.join(datadir,"img",name+".tif")))
@@ -61,11 +63,10 @@ def load_data(filename,datadir,co_transform,img_transform,label_transform):
         img,label = co_transform((img,label))
         img = img_transform(img)
         label = label_transform(label)
-        ohlabel = OneHotEncode()(label)
-
+        ohlabel = (label[None,:,:] == idx).long()
         img_dict[name] = img
         label_dict[name] = label
-        oh_label_dict[name] = label
+        oh_label_dict[name] = ohlabel
     return img_dict,label_dict,oh_label_dict
 
 class MRBrainS(Dataset):

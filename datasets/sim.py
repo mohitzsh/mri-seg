@@ -27,10 +27,10 @@ def load_data(start,end,data_dir,img_transform,label_transform,co_transform):
 def get_pairs(start,end):
     pairs = []
     for s_idx in np.arange(end):
+        pairs.append((s_idx,s_idx))
         for e_idx in np.arange(s_idx +1, end+1):
             pairs.append((s_idx,e_idx))
             pairs.append((e_idx,s_idx))
-            pairs.append((s_idx,s_idx))
 
     return pairs
 class Sim(Dataset):

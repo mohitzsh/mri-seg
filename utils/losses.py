@@ -18,22 +18,21 @@ def cc(I,J,n=9,eps=10e-5):
     ker = torch.ones((1,1,9,9))
     if I.is_cuda:
         ker = ker.cuda()
-    I_sum = F.conv2d(Variable(I),Variable(ker),padding=n//2)
-    J_sum = F.conv2d(Variable(J),Variable(ker),padding=n//2)
-    IJ_sum = F.conv2d(Variable(IJ),Variable(ker),padding=n//2)
-    I2_sum = F.conv2d(Variable(I2),Variable(ker),padding=n//2)
-    J2_sum = F.conv2d(Variable(J2),Variable(ker),padding=n//2)
+    I_sum = F.conv2d(I,Variable(ker),padding=n//2)
+    J_sum = F.conv2d(J,Variable(ker),padding=n//2)
+    IJ_sum = F.conv2d(IJ,Variable(ker),padding=n//2)
+    I2_sum = F.conv2d(I2,Variable(ker),padding=n//2)
+    J2_sum = F.conv2d(J2,Variable(ker),padding=n//2)
     I_mean = I_sum/(1.0*n*n)
     J_mean = J_sum/(1.0*n*n)
 
     num = (IJ_sum - I_mean*J_sum - J_mean*I_sum + I_mean*J_mean*n*n)**2
     denom1 = (I2_sum + I_mean*I_mean*n*n - 2*I_mean*I_sum)
     denom2 = (J2_sum + J_mean*J_mean*n*n - 2*J_mean*J_sum)
-
     denom = denom1*denom2
-    # filter out negative values
-    denom[denom<0] = 0
-    loss = -1.0*torch.log(torch.mean(num[denom > 1] /denom[denom > 1]))
-    # Check for regions where std of any one of I or J is zero
-    # cc for that reqion is assigned a value 0.
+    # loss = -1.0*torch.mean(num/(denom + 1e-5))
+    # denom = denom1*denom2
+    # # filter out negative values
+    # denom[denom<0] = 0\
+    loss = -1.0*torch.log(torch.mean((num+1)/(denom+1)))
     return loss

@@ -89,7 +89,7 @@ class outconv(nn.Module):
         return x
 
 class UNetSmall(nn.Module):
-    def __init__(self, nker = 8,n_channels=2, n_classes=2,w_init='default'):
+    def __init__(self, nker = 8,n_channels=2, n_classes=2):
         super(UNetSmall, self).__init__()
         self.inc = inconv(n_channels, nker)
         self.down1 = down(nker, nker)
@@ -101,10 +101,6 @@ class UNetSmall(nn.Module):
         self.up3 = up(2*nker, nker)
         self.up4 = up(2*nker, nker)
         self.outc = outconv(nker, n_classes)
-
-        global weight_init
-        weight_init = w_init
-
 
 
     def forward(self, x):

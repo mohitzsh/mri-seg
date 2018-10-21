@@ -35,7 +35,9 @@ from utils.validate import validate_sim
 from utils.validate import validate_mrbrains
 import tensorboardX as tbx
 from torch.optim.lr_scheduler import StepLR
-
+from parameternet.unet_v1 import UNetV1
+import visdom
+from utils.grid import process_disp
 homedir = os.path.dirname(os.path.realpath(__file__))
 
 H = 229
@@ -154,6 +156,15 @@ def weight_init(m):
         elif w_init =="he_normal":
             nn.init.kaiming_normal(m.weight.data,mode='fan_out')
 
+def visualize_loss(Y,X,win,vis):
+    vis.line(Y=Y,X=X,win=win,update='append')
+
+def visualize_dice(Y,X,win,vis,opts):
+    vis.line(Y=Y,X=X,win=win,update='append',opts=opts)
+
+def visualize_transform_heatmap(X,title,vis):
+    vis.heatmap(X=X,opts=dict(title=title))
+
 """
     Parse Arguments
 """
@@ -200,12 +211,13 @@ def parse_arguments():
     parser.add_argument("--val_s_idx",type=int,default=5991)
     parser.add_argument("--val_e_idx",type=int,default=5999)
     parser.add_argument("--similarity",choices=('l2','cc'),default='cc')
-    parser.add_argument("--log_dir",default="runs")
     parser.add_argument("--l2_weight",type=float,default=10e-4)
     parser.add_argument("--nker",type=int,default=8)
     parser.add_argument("--step_lr_step_size",type=int,default=1)
     parser.add_argument("--step_lr_gamma",type=float,default=0.1)
     parser.add_argument("--weight_init",choices=('default','xavier_uniform','xavier_normal','he_uniform','he_normal'),default='default')
+    parser.add_argument("--visdom_server",default="http://cuda.cs.purdue.edu")
+    parser.add_argument("--visdom_port",type=int,default=1235)
     return parser.parse_args()
 
 def main():
@@ -213,8 +225,20 @@ def main():
     args_str = str(vars(args))
     global w_init
     w_init = args.weight_init
-    logger = tbx.SummaryWriter(log_dir = args.log_dir,comment=args.exp_name)
-    logger.add_text('training details',args_str,0)
+
+    # Setup tensorboardX logger
+    # logger = tbx.SummaryWriter(log_dir = args.log_dir,comment=args.exp_name)
+    # logger.add_text('training details',args_str,0)
+
+    # Setup Visdom Logger
+    vis = visdom.Visdom(server=args.visdom_server,port = int(args.visdom_port),env=args.exp_name)
+    vis.close(win=None) # Close all existing windows from the current environment
+
+    vis.text(args_str)
+    ##############################################
+    # Visdom Windows for Transformation Heatmaps #
+    ##############################################
+
     #############################################
     # TRAINING DATASET: GENERIC TRANSFORMATION ##
     #############################################
@@ -231,10 +255,12 @@ def main():
                     img_transform=Compose(img_transform),label_transform=Compose(label_transform))
     trainloader = DataLoader(trainset,batch_size =args.batch_size,shuffle=True,drop_last=True)
     print("Dataset Loaded")
+
     #####################
     # PARAMETER NETWORK #
     ####################
 
+    # net = UNetV1(args.nker)
     net = UNetSmall(args.nker)
     if torch.cuda.is_available():
         net = nn.DataParallel(net).cuda()
@@ -273,23 +299,68 @@ def main():
         best_score = snapshot['best_score']
         net.load_state_dict(snapshot['net'])
         opt.load_state_dict(snapshot['optimizer'])
+
     else:
         print("No Checkpoint Found")
-    #################################
-    ## TRAINING PROCESS STARTS NOW ##
-    #################################
+
+    #####################
+    # VISDOM LOSS SETUP #
+    #####################
+    win_loss_total = vis.line(Y=np.empty(1),opts=dict(title='loss_total'))
+    win_loss_sim = vis.line(Y=np.empty(1),opts=dict(title='loss_sim'))
+    win_loss_reg = vis.line(Y=np.empty(1),opts=dict(title='loss_reg'))
+    win_loss_seg = vis.line(Y=np.empty(1),opts=dict(title='loss seg'))
+
+    #####################
+    # VISDOM DICE SETUP #
+    #####################
+    dice_opts_t1 = dict(
+        title='dice_t1',
+        legend=['0','1','2','3'],
+    )
+    dice_opts_t1_ir = dict(
+        title='dice_t1_ir',
+        legend=['0','1','2','3'],
+    )
+    dice_opts_t2 = dict(
+        title='dice_t2',
+        legend=['0','1','2','3'],
+    )
+    # empty_data = np.empty((1,nclasses))
+    # empty_data[...] = np.nan
+    # win_dice_t1 = vis.line(Y=empty_data,opts=dice_opts_t1)
+    # win_dice_t1_ir = vis.line(Y=empty_data,opts=dice_opts_t1_ir)
+    # win_dice_t2 = vis.line(Y=empty_data,opts=dice_opts_t2)
+    win_dice_t1 = None
+    win_dice_t1_ir = None
+    win_dice_t2 = None
+
+    #############
+    ## TRAINING #
+    #############
 
 
-    ##############
-    # debug the mrbrains validation code
-    score = validate_mrbrains(net,args.data_dir_3d,[1,2,3],[4],logger,0)
+    ##########
+    # DEBUG  #
+    #########
+    #val_results = validate_mrbrains(net,args.data_dir_3d,[1,2,3],[4])
+    ####################################
+
     for epoch in np.arange(args.start_epoch,args.max_epoch):
         scheduler.step()
+
+        loss_total = []
+        loss_sim = []
+        loss_reg = []
+        loss_seg = []
+        steps = []
+
         for batch_id, ((img1,label1,ohlabel1,fname1),(img2,label2,ohlabel2,fname2)) in enumerate(trainloader):
             if img1 is None or label1 is None or img2 is None or label2 is None or ohlabel1 is None:
                 continue
             net.train()
             itr = len(trainloader)*(epoch) + batch_id
+            steps.append(itr)
             ####################
             # Debug Snapshot code
             #################
@@ -300,19 +371,32 @@ def main():
             else:
                 img1, label1, img2, label2,combimg, ohlabel1 = Variable(img1), Variable(label1),\
                         Variable(img2), Variable(label2), Variable(torch.cat((img1,img2),1)), Variable(ohlabel1)
-
+            # (disp0,disp1,disp2) = net(combimg)
+            # disp0 = reshape_transform(disp0)
+            # disp1 = reshape_transform(disp1)
+            # disp2 = reshape_transform(disp2)
             disp = net(combimg)
-            orig_size = disp.size()
-            n,h,w = (disp.shape[0],disp.shape[2],disp.shape[3])
-            disp = disp.resize(n,h,w,2)
+            disp = process_disp(disp)
+
             ##########################
             ## IMAGE TRANSFORMATION ##
             ##########################
+            # grid_img0 = basegrid_img + disp0
+            # grid_img1 = basegrid_img + disp1 + disp0
+            # grid_img2 = basegrid_img + disp2 + disp1 + disp0
             grid_img = basegrid_img + disp
 
+            # img1t0 = F.grid_sample(img1,grid_img0)
+            # img1t1 = F.grid_sample(img1,grid_img1)
+            # img1t2 = F.grid_sample(img1,grid_img2)
             img1t = F.grid_sample(img1,grid_img)
+
             if args.similarity == 'cc':
-                Lsim = cc(img1t.data,img2.data)
+                # Lsim0 = cc(img1t0.data,img2.data)
+                # Lsim1 = cc(img1t1.data,img2.data)
+                # Lsim2 = cc(img1t2.data,img2.data)
+                # Lsim = Lsim0 + Lsim1 + Lsim2
+                Lsim = cc(img1t,img2)
             elif args.similarity == 'l2':
                 Lsim = nn.MSELoss()(img1t,img2)
 
@@ -321,7 +405,7 @@ def main():
             ### LABEL TRANSFORMATION ##
             ###########################
             Lseg = Variable(torch.Tensor([0]),requires_grad=True)
-            if args.gpu:
+            if torch.cuda.is_available():
                 Lseg = Variable(torch.Tensor([0]).cuda(),requires_grad=True)
             if args.lambdaseg != 0:
                 grid_label = basegrid_label + disp
@@ -334,20 +418,28 @@ def main():
             ###################
             Lreg = Variable(torch.Tensor([0]),requires_grad=True)
             target = torch.zeros(1)
-            if args.gpu:
+            if torch.cuda.is_available():
                 Lreg = Variable(torch.Tensor([0]).cuda(),requires_grad=True)
             if args.lambdareg != 0:
-                disp = disp.view(-1,2,h,w)
-                dx = torch.abs(disp[:,:,1:,:] -disp[:,:,:-1,:])
-                dy = torch.abs(disp[:,:,:,1:] - disp[:,:,:,:-1])
+                # disp = disp.view(-1,2,h,w)
+                dx = disp[:,1:,:,:] -disp[:,:-1,:,:]
+                dy = disp[:,:,1:,:] - disp[:,:,:-1,:]
                 # Implement L1 penalty for now
-                dx_mean = torch.mean(dx)
-                dy_mean = torch.mean(dy)
-                target = torch.zeros(1)
-                if args.gpu:
-                    target = target.cuda()
-                Lreg = nn.L1Loss()((dx_mean+dy_mean)/2,Variable(target))
+                # Try to constrain the second derivative
+                d2dx2 = torch.abs(dx[:,1:,:,:] - dx[:,:-1,:,:])
+                d2dy2 = torch.abs(dy[:,:,1:,:] - dy[:,:,:-1,:])
+                d2dxdy = torch.abs(dx[:,:,1:,:] - dx[:,:,:-1,:])
+                d2dydx = torch.abs(dy[:,1:,:,:] - dy[:,:-1,:,:])
 
+                d2_mean = (torch.mean(d2dx2) + torch.mean(d2dy2) + torch.mean(d2dxdy) + torch.mean(d2dydx))/4
+
+                # dx_mean = torch.mean(dx)
+                # dy_mean = torch.mean(dy)
+                # target = torch.zeros(1)
+                # if args.gpu:
+                #     target = target.cuda()
+                # Lreg = nn.L1Loss()((dx_mean+dy_mean)/2,Variable(target))
+                Lreg = d2_mean
             ######################
             ## PARAMETER UPDATE ##
             ######################
@@ -357,28 +449,106 @@ def main():
             Ltotal.backward()
             opt.step()
 
-            logger.add_scalars("Loss",{"Total":Ltotal.data[0],"Similarity":Lsim.data[0],"Regularization":args.lambdareg*Lreg.data[0]},itr)
-            # logger.add_scalar("lr",lr,itr)
+            free_vars(img1,img2,label1,label2,combimg,ohlabel1,ohlabel2,target)
 
-            # Delete the variables
-            free_vars(img1,img2,label1,label2,combimg,ohlabel1,ohlabel2,disp,target,img1t)
 
+            loss_total.append(Ltotal.data[0])
+            loss_reg.append(Lreg.data[0])
+            loss_sim.append(Lsim.data[0])
+            loss_seg.append(Lseg.data[0])
 
             if itr % args.error_iter ==0:
                 print("[{}][{}] Ltotal: {:.6} Lsim: {:.6f} Lseg: {:.6f} Lreg: {:.6f} ".\
-                    format(epoch,itr,Ltotal.data[0],Lsim.data[0],args.lambdaseg*(Lseg.data[0]),args.lambdareg*(Lreg.data[0])))
+                    format(epoch,itr,Ltotal.data[0],Lsim.data[0],args.lambdaseg*(Lseg.data[0]),Lreg.data[0]))
 
+        ############
+        # VALIDATE #
+        ############
         if args.dataset == "sim":
             score = validate_sim(net,args.data_dir_2d,args.train_s_idx,args.train_e_idx,args.val_s_idx,args.val_e_idx,args.gpu)
         if args.dataset == "ibsr":
             score = validate_ibsr(net,args.data_dir_3d,args.train_vols,args.val_vols,args.img_suffix,args.cls_suffix,perm,args.gpu)
         if args.dataset == "mrbrains":
-            score = validate_mrbrains(net,args.data_dir_3d,[1,2,3],[4],logger,epoch)
-        # Compare the current result to the best result and take a snapshot
+            val_results = validate_mrbrains(net,args.data_dir_3d,[1,2,3],[4]) # Makeshift changes! Be very careful
+            dice_t1 = val_results['scores']['t1']
+            dice_t1_ir = val_results['scores']['t1_ir']
+            dice_t2 = val_results['scores']['t2']
+            if torch.cuda.is_available():
+                dice_t1 = dice_t1.cpu().numpy()
+                dice_t1_ir = dice_t1_ir.cpu().numpy()
+                dice_t2 = dice_t2.cpu().numpy()
+            else:
+                dice_t1 = dice_t1.numpy()
+                dice_t1_ir = dice_t1_ir.numpy()
+                dice_t2 = dice_t2.numpy()
+            print("dice_t1: {}".format(dice_t1))
+            print("dice_t1_ir: {}".format(dice_t1_ir))
+            print("dice_t2: {}".format(dice_t2))
+            score = (dice_t1 + dice_t1_ir + dice_t2 )/3
+        # ############
+        # # SNAPSHOT #
+        # ############
         best_score = take_snapshot(best_score,score,opt,net,epoch,snapshot_path(args.snapshot_dir,args.exp_name))
-        logger.add_scalars('Dice Scores Overall',{'1' : score[1],'2': score[2], '3': score[3]},epoch)
-    if args.visualize:
-        make_video('{}.mp4'.format(args.exp_name),args.exp_name,keep_imgs=False)
-    logger.close()
+
+        ########################
+        ########################
+        ## VISUALIZATION CODE ##
+        ########################
+        ########################
+
+
+        # ##################
+        # # VISUALIZE LOSS #
+        # ##################
+        vis.line(Y=np.array(loss_total),X=np.array(steps),win=win_loss_total,update='append')
+        vis.line(Y=np.array(loss_sim),X=np.array(steps),win=win_loss_sim,update='append')
+        vis.line(Y=np.array(loss_reg),X=np.array(steps),win=win_loss_reg,update='append')
+        vis.line(Y=np.array(loss_seg),X=np.array(steps),win=win_loss_seg,update='append')
+
+
+        ########################
+        # VISUALIZE THE SCORES #
+        ########################
+        if win_dice_t1 is None:
+            win_dice_t1 = vis.line(Y=dice_t1.reshape(1,nclasses),X=np.array([epoch]),opts=dict(title='dice_t1'))
+        else:
+            vis.line(Y=dice_t1.reshape(1,nclasses),X=np.array([epoch]),win=win_dice_t1,update='append')
+        if win_dice_t1_ir is None:
+            win_dice_t1_ir = vis.line(Y=dice_t1_ir.reshape(1,nclasses),X=np.array([epoch]),opts=dict(title='dice_t1_ir'))
+        else:
+            vis.line(Y=dice_t1_ir.reshape(1,nclasses),X=np.array([epoch]),win=win_dice_t1_ir,update='append')
+        if win_dice_t2 is None:
+            win_dice_t2 = vis.line(Y=dice_t2.reshape(1,nclasses),X=np.array([epoch]),opts=dict(title='dice_t2'))
+        else:
+            vis.line(Y=dice_t2.reshape(1,nclasses),X=np.array([epoch]),win=win_dice_t2,update='append')
+
+        # #####################################################################################
+        # # VISUALIZE THE TRANFORMATION PARAMETER OF CENTRAL SLICE AS HEATMAP FOR TRAIN VOL 0 #
+        # #####################################################################################
+        field_t1 = val_results['fields']['t1']
+        field_t1_ir = val_results['fields']['t1_ir']
+        field_t2 = val_results['fields']['t2']
+        if torch.cuda.is_available():
+            field_t1 = field_t1.cpu()
+            field_t1_ir = field_t1_ir.cpu()
+            field_t2  = field_t2.cpu()
+
+        transform_x_t1 = field_t1[0,0,100,:,:,0]
+        transform_y_t1 = field_t1[0,0,100,:,:,1]
+        transform_x_t1_ir = field_t1_ir[0,0,100,:,:,0]
+        transform_y_t1_ir = field_t1_ir[0,0,100,:,:,1]
+        transform_x_t2 = field_t2[0,0,100,:,:,0]
+        transform_y_t2 = field_t2[0,0,100,:,:,1]
+
+        vis.heatmap(X=transform_x_t1,opts=dict(title="t1_0_x_{}".format(epoch)))
+        vis.heatmap(X=transform_y_t1,opts=dict(title="t1_0_y_{}".format(epoch)))
+        vis.heatmap(X=transform_x_t1_ir,opts=dict(title="t1_ir_0_x_{}".format(epoch)))
+        vis.heatmap(X=transform_y_t1_ir,opts=dict(title="t1_ir_0_y_{}".format(epoch)))
+        vis.heatmap(X=transform_x_t2,opts=dict(title="t2_0_x_{}".format(epoch)))
+        vis.heatmap(X=transform_y_t2,opts=dict(title="t2_0_y_{}".format(epoch)))
+
+        vis.save([args.exp_name])
+
+
 if __name__ == "__main__":
     main()

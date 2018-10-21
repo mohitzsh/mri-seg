@@ -7,13 +7,14 @@ from torch.autograd import Variable
 from utils.transforms import OneHotEncode
 import argparse
 from utils.scores import dice_score
+from utils.scores import dice_score_3d
 import os
 import nibabel as nib
 from torchvision.transforms import Compose
 
 from utils.transforms import ToTensorLabel
 from utils.transforms import ToTensorTIF
-
+from utils.grid import process_disp
 
 from PIL import Image
 GPU = False
@@ -54,8 +55,8 @@ def generate_grid(net,combslice):
     net.eval()
 
     disp = net(Variable(combslice,volatile=True))
-    orig_size = disp.size()
-    disp = disp.resize(orig_size[0],orig_size[2],orig_size[3],2)
+    # disp = disp.resize(orig_size[0],orig_size[2],orig_size[3],2)
+    disp = process_disp(disp)
 
     return disp
 
@@ -439,7 +440,6 @@ def combine_vol(vol1,vol2):
 """
 def transform_faster(img1,img2,cls1,net):
     net.eval()
-
     combimg = combine_vol(img1,img2) # Dx2xHxW
 
     # Generate transformation field
@@ -460,7 +460,7 @@ def transform_faster(img1,img2,cls1,net):
 
     # Transform labels
     cls1oht = F.grid_sample(Variable(cl1_oh.float()),grid_cls)
-    img1t = F.grid_sample(Variable(img1[:,None,:,:]),grid_cls)
+    img1t = F.grid_sample(Variable(img1[:,None,:,:]),grid_img)
 
     return img1t.data,cls1oht.data.long(),disp.data
 
@@ -483,12 +483,16 @@ def register_mrbrains(net,train_subjects,val_subjects,modality,data_proc):
     predictions = None
     gt = None
     transformation_field = None
+    transformed_img = None
+    predicted_cls = None
     for vidx,vj in enumerate(val_subjects):
         val_cls = mrbrains_val_cls_dict[str(vj)]
         if predictions is None:
             predictions = torch.zeros((len(val_subjects),)+val_cls.shape)
             gt = torch.zeros((len(val_subjects),)+val_cls.shape)
             transformation_field = torch.zeros((len(val_subjects),len(train_subjects),)+val_cls.shape + (2,))
+            transformed_img = torch.zeros((len(val_subjects),len(train_subjects),)+val_cls.shape)
+            predicted_cls = torch.zeros((len(val_subjects),len(train_subjects),)+val_cls.shape)
             if torch.cuda.is_available():
                 predictions = predictions.cuda()
                 gt = gt.cuda()
@@ -497,7 +501,7 @@ def register_mrbrains(net,train_subjects,val_subjects,modality,data_proc):
         for mod_val in modality:
             for proc_val in data_proc:
                 val_t1_img = mrbrains_val_img_dict[str(vj)][mod_val][proc_val]
-                prediction = torch.zeros((nclasses,)+val_cls.shape).long()
+                prediction = torch.zeros((val_cls.shape[0],nclasses,)+val_cls.shape[1:]).long()
                 if torch.cuda.is_available():
                     val_t1_img = val_t1_img.cuda()
                     prediction = prediction.cuda()
@@ -509,38 +513,52 @@ def register_mrbrains(net,train_subjects,val_subjects,modality,data_proc):
                             if torch.cuda.is_available():
                                 train_cls = train_cls.cuda()
                                 train_t1_img = train_t1_img.cuda()
-                            _,val_t1_cls_oht,disp  = transform_faster(train_t1_img,val_t1_img,train_cls,net)
+                            train_t1_imgt,val_t1_cls_oht,disp  = transform_faster(train_t1_img,val_t1_img,train_cls,net)
                             transformation_field[vidx,tidx] = disp
+                            transformed_img[vidx,tidx] = train_t1_imgt
+                            _,predicted_cls[vidx,tidx] = torch.max(val_t1_cls_oht,dim=1)
                             prediction += val_t1_cls_oht
-        _,prediction = torch.max(prediction,dim=0)
+        _,prediction = torch.max(prediction,dim=1)
         predictions[vidx] = prediction
     if torch.cuda.is_available():
         predictions = predictions.cpu()
         gt = gt.cpu()
-    score = torch.from_numpy(dice_score(gt.numpy(),predictions.numpy(),nclasses))
+    score = torch.from_numpy(dice_score_3d(gt.numpy(),predictions.numpy(),nclasses))
     if torch.cuda.is_available():
         predictions = predictions.cuda()
         predictions = predictions.cuda()
         score = score.cuda()
+        gt = gt.cuda()
 
     score = torch.mean(score,dim=0,keepdim=True)
-    return predictions,gt,score[0],transformation_field
+    return predictions,gt,score[0],transformation_field,predictions,transformed_img
 
-def validate_mrbrains(net,data_dir,train_subjects,val_subjects,logger,epoch):
+def validate_mrbrains(net,data_dir,train_subjects,val_subjects):
     load_mrbrains_dataset(data_dir,train_subjects,val_subjects)
 
     # Use scores from all modalities separately for processed data
-    predictions_t1, gt, score_t1, field_t1 = register_mrbrains(net,train_subjects,val_subjects,["t1"],["proc"])
-    predictions_t1_ir,_,score_t1_ir,field_t1_ir = register_mrbrains(net,train_subjects,val_subjects,["t1_ir"],["proc"])
-    predictions_t2,_,score_t2,field_t2 = register_mrbrains(net,train_subjects,val_subjects,["t2"],["proc"])
-    # Add these scores to the logger
-    logger.add_scalars('Dice Scores t1',{'1' : score_t1[1],'2': score_t1[2], '3': score_t1[3]},epoch)
-    logger.add_scalars('Dice Scores t1_ir',{'1' : score_t1_ir[1],'2': score_t1_ir[2], '3': score_t1_ir[3]},epoch)
-    logger.add_scalars('Dice Scores t2',{'1' : score_t2[1],'2': score_t2[2], '3': score_t2[3]},epoch)
+    predictions_t1, gt, score_t1, field_t1,pred_t1,trans_img_t1 = register_mrbrains(net,train_subjects,val_subjects,["t1"],["proc"])
+    predictions_t1_ir,_,score_t1_ir,field_t1_ir,pred_t1_ir,trans_img_t1_ir = register_mrbrains(net,train_subjects,val_subjects,["t1_ir"],["proc"])
+    predictions_t2,_,score_t2,field_t2,pred_t2,trans_img_t2 = register_mrbrains(net,train_subjects,val_subjects,["t2"],["proc"])
 
-    # visualize, the distribution of the displacement field
-
-    return score_t1
+    return {
+        'predictions': {
+            't1' : predictions_t1,
+            't1_ir': predictions_t1_ir,
+            't2': predictions_t2
+            },
+        'gt' : gt,
+        'fields' : {
+            't1': field_t1,
+            't1_ir': field_t1_ir,
+            't2': field_t2
+            },
+        'scores':{
+            't1': score_t1,
+            't1_ir': score_t1_ir,
+            't2': score_t2
+            }
+    }
 
 def parse_arguments():
     # TODO: Add argument to use a trained model

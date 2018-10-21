@@ -1,5 +1,7 @@
 import torch
 from torch.nn import ConstantPad2d
+from torch.nn import Hardtanh
+from torch.nn import Sigmoid
 
 def forward_diff(grid):
     nd = len(grid.data.shape)
@@ -28,3 +30,10 @@ def forward_diff(grid):
     diffy = ConstantPad2d((0,0,1,0),0)(diffy)
 
     return torch.cat((diffx,diffy),1)
+
+def process_disp(disp):
+    disp = torch.transpose(disp,1,2)
+    disp = torch.transpose(disp,2,3)
+    # disp = Hardtanh()(disp)
+    disp = Sigmoid()(disp)
+    return disp

@@ -33,6 +33,15 @@ def arguments():
 
     return parser.parse_args()
 
+def generate_transformation(img_shape,sigma):
+    assert isinstance(img_shape,tuple)
+    assert len(img_shape) == 2
+
+    dx = gaussian_filter((np.random.rand(*shape) * 2 - 1),sigma, mode="constant", cval=0)
+    dy = gaussian_filter((np.random.rand(*shape) * 2 - 1),sigma, mode="constant", cval=0)
+
+    return dx,dy
+
 def elastic_transform(img,cls, alpha=1000, sigma=30, spline_order=1, mode='nearest', random_state=np.random):
     """Elastic deformation of image as described in [Simard2003]_.
     .. [Simard2003] Simard, Steinkraus and Platt, "Best Practices for
@@ -111,7 +120,8 @@ def transform(shape,base_r1,base_r2,base_r3,base_cx,base_cy,args):
     new_img,new_cls = elastic_transform(img,cls,alpha,sigma)
 
     return new_img,new_cls
-
+"""
+"""
 if __name__ == "__main__":
     args = arguments()
     base_r1 = 20
